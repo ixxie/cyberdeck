@@ -1,0 +1,24 @@
+{ pkgs, lib, ... }:
+{
+  enable = false;
+  name = "Storage";
+  icon = "hard-drives";
+  deps = [];
+  source = {
+    type = "native";
+    kind = "storage";
+    interval = 30;
+  };
+  badges = {
+    default = {
+      template = ''{{ "hard-drives" | icon }}'';
+      condition = "{{ disks | selectattr('percent', 'ge', 80) | list | length > 0 }}";
+    };
+  };
+  widget = {
+    template = ''{% for d in disks %}{{ d.mount }} {{ d.avail_bytes | human_bytes }}/{{ d.size_bytes | human_bytes }}{% if not loop.last %}  {% endif %}{% endfor %}'';
+  };
+  key-hints = [
+    { key = "Esc"; action = "back"; label = "back"; }
+  ];
+}

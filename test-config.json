@@ -1,0 +1,118 @@
+{
+  "settings": {
+    "position": "top",
+    "font": "monospace",
+    "font-size": 14,
+    "icon-weight": "light",
+    "toggle-key": "Super+B",
+    "background": {
+      "color": "#1e1e2e",
+      "opacity": 0.9,
+      "blur": true
+    }
+  },
+  "bar": {
+    "name": "root",
+    "groups": [
+      { "modules": ["workspaces"], "max": null },
+      { "modules": ["time"], "max": null },
+      { "modules": ["network", "|", "power"], "max": null }
+    ],
+    "children": {
+      "time": {
+        "name": "Time",
+        "type": "calendar",
+        "source": {
+          "type": "poll",
+          "command": ["bash", "-c", "date +'{\"hour\":\"%H\",\"minute\":\"%M\",\"second\":\"%S\",\"date\":\"%a %d %b %Y\"}'"],
+          "interval": 1
+        },
+        "widget": {
+          "template": "{{ hour }}:{{ minute }}"
+        },
+        "groups": [],
+        "children": {}
+      },
+      "workspaces": {
+        "name": "Workspaces",
+        "source": {
+          "type": "subscribe",
+          "command": ["python3", "-c", "import json,time; print(json.dumps({'workspaces':[{'id':1,'name':'1','active':True,'windows':2},{'id':2,'name':'2','active':False,'windows':0}]}),flush=True); time.sleep(86400)"]
+        },
+        "widget": {
+          "template": "{% for ws in workspaces %}{% if ws.active %}[{{ ws.name }}]{% else %} {{ ws.name }} {% endif %}{% endfor %}"
+        },
+        "groups": [],
+        "children": {}
+      },
+      "network": {
+        "name": "Network",
+        "source": {
+          "type": "poll",
+          "command": ["bash", "-c", "echo '{\"connected\":true,\"type\":\"wifi\",\"ssid\":\"MyNetwork\",\"signal\":80,\"ip\":\"192.168.1.42\"}'"],
+          "interval": 10
+        },
+        "widget": {
+          "template": "{% if connected %}{{ ssid }}{% else %}disconnected{% endif %}"
+        },
+        "groups": [],
+        "children": {}
+      },
+      "power": {
+        "name": "Power",
+        "source": {
+          "type": "poll",
+          "command": ["bash", "-c", "echo '{\"capacity\":87,\"charging\":false,\"status\":\"Discharging\"}'"],
+          "interval": 10
+        },
+        "widget": {
+          "template": "{{ capacity }}%"
+        },
+        "groups": [
+          { "modules": ["profiles", "suspend"], "max": null }
+        ],
+        "children": {
+          "profiles": {
+            "name": "Profiles",
+            "groups": [
+              { "modules": ["saver", "balanced", "performance"], "max": null }
+            ],
+            "children": {
+              "saver": {
+                "name": "Saver",
+                "command": "echo set power-saver",
+                "widget": { "template": "saver" }
+              },
+              "balanced": {
+                "name": "Balanced",
+                "command": "echo set balanced",
+                "widget": { "template": "balanced" }
+              },
+              "performance": {
+                "name": "Performance",
+                "command": "echo set performance",
+                "widget": { "template": "perf" }
+              }
+            }
+          },
+          "suspend": {
+            "name": "Suspend",
+            "command": "echo systemctl suspend",
+            "widget": { "template": "suspend" }
+          }
+        },
+        "events": [
+          {
+            "name": "low",
+            "condition": "{{ capacity < 20 and not charging }}",
+            "on_trigger": "echo Battery at {{ capacity }}%"
+          },
+          {
+            "name": "critical",
+            "condition": "{{ capacity < 5 and not charging }}"
+          }
+        ]
+      }
+    }
+  }
+}
