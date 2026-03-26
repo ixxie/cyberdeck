@@ -4,256 +4,281 @@ use tiny_skia::Pixmap;
 use unicode_width::UnicodeWidthChar;
 
 use crate::color::Rgba;
+use crate::icons::IconSet;
 
-#[derive(Debug, Clone)]
-pub struct RenderedWidget {
-    pub text: String,
-    pub fg: Option<Rgba>,
-    pub bg: Option<Rgba>,
-    pub path: Option<String>,
-    pub is_breadcrumb: bool,
-    pub icon_pixmap: Option<Arc<Pixmap>>,
-}
+// === Build layer: what views construct ===
 
-impl RenderedWidget {
-    pub fn new(text: String) -> Self {
-        Self { text, fg: None, bg: None, path: None, is_breadcrumb: false, icon_pixmap: None }
-    }
-
-    pub fn with_icon_pixmap(mut self, pm: Arc<Pixmap>) -> Self {
-        self.icon_pixmap = Some(pm);
-        self
-    }
-
-    pub fn with_path(mut self, path: &str) -> Self {
-        self.path = Some(path.to_string());
-        self
-    }
-
-    pub fn with_fg(mut self, fg: Rgba) -> Self {
-        self.fg = Some(fg);
-        self
-    }
-
-}
-
-#[derive(Debug, Clone)]
-pub struct HitArea {
-    pub start_x: f32,
-    pub end_x: f32,
-    pub path: String,
-    pub is_breadcrumb: bool,
-}
-
-// --- Flex Layout ---
-
-#[derive(Debug, Clone)]
-pub struct LayoutItem {
-    pub x: f32,
-    pub width: f32,
+#[derive(Clone)]
+pub struct Elem {
     pub text: String,
     pub fg: Rgba,
-    pub bg: Option<Rgba>,
-    pub icon_pixmap: Option<Arc<Pixmap>>,
+    pub icon: Option<Arc<Pixmap>>,
+    pub path: Option<String>,
 }
 
-#[derive(Debug)]
-pub struct Layout {
-    pub items: Vec<LayoutItem>,
-    pub hit_areas: Vec<HitArea>,
-}
-
-impl Layout {
-    pub fn measure_with_icon(text: &str, icons: &crate::icons::IconSet, cell_w: f32, scale: f32, icon_pixmap: Option<&Pixmap>) -> f32 {
-        let icon_w = icon_pixmap.map(|pm| pm.width() as f32 / scale + cell_w * 0.5).unwrap_or(0.0);
-        icon_w + Self::measure(text, icons, cell_w, scale)
+impl Elem {
+    pub fn text(text: impl Into<String>) -> Self {
+        Self { text: text.into(), fg: Rgba::default(), icon: None, path: None }
     }
 
-    pub fn measure(text: &str, icons: &crate::icons::IconSet, cell_w: f32, scale: f32) -> f32 {
+    pub fn fg(mut self, fg: Rgba) -> Self {
+        self.fg = fg;
+        self
+    }
+
+    pub fn icon(mut self, pm: Arc<Pixmap>) -> Self {
+        self.icon = Some(pm);
+        self
+    }
+
+    pub fn path(mut self, p: impl Into<String>) -> Self {
+        self.path = Some(p.into());
+        self
+    }
+}
+
+#[derive(Clone)]
+pub struct Span {
+    pub elems: Vec<Elem>,
+    pub bg: Option<Rgba>,
+    pub radius: f32,
+    pub pad: f32,
+    pub path: Option<String>,
+    pub opacity: f32,
+}
+
+impl Span {
+    pub fn new(elems: Vec<Elem>) -> Self {
+        Self { elems, bg: None, radius: 0.0, pad: 0.0, path: None, opacity: 1.0 }
+    }
+
+    pub fn bg(mut self, bg: Rgba) -> Self {
+        self.bg = Some(bg);
+        self
+    }
+
+    pub fn radius(mut self, r: f32) -> Self {
+        self.radius = r;
+        self
+    }
+
+    pub fn pad(mut self, p: f32) -> Self {
+        self.pad = p;
+        self
+    }
+
+    pub fn path(mut self, p: impl Into<String>) -> Self {
+        self.path = Some(p.into());
+        self
+    }
+
+    pub fn opacity(mut self, o: f32) -> Self {
+        self.opacity = o;
+        self
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Align { Left, Center, Right }
+
+pub struct Zone {
+    pub align: Align,
+    pub spans: Vec<Span>,
+    pub gap: f32,
+}
+
+impl Zone {
+    pub fn left(spans: Vec<Span>, gap: f32) -> Self {
+        Self { align: Align::Left, spans, gap }
+    }
+
+    pub fn center(spans: Vec<Span>, gap: f32) -> Self {
+        Self { align: Align::Center, spans, gap }
+    }
+
+    pub fn right(spans: Vec<Span>, gap: f32) -> Self {
+        Self { align: Align::Right, spans, gap }
+    }
+}
+
+// === Computed layer: what renderer consumes ===
+
+#[derive(Clone, Copy, Debug)]
+pub struct Rect {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
+impl Rect {
+    pub fn contains(&self, x: f32, y: f32) -> bool {
+        x >= self.x && x < self.x + self.w && y >= self.y && y < self.y + self.h
+    }
+}
+
+pub struct FElem {
+    pub rect: Rect,
+    pub text: String,
+    pub fg: Rgba,
+    pub icon: Option<Arc<Pixmap>>,
+}
+
+pub struct FSpan {
+    pub rect: Rect,
+    pub bg: Option<Rgba>,
+    pub radius: f32,
+    pub opacity: f32,
+    pub elems: Vec<FElem>,
+}
+
+pub struct Hit {
+    pub rect: Rect,
+    pub path: String,
+}
+
+pub struct Frame {
+    pub spans: Vec<FSpan>,
+    pub hits: Vec<Hit>,
+}
+
+impl Frame {
+    pub fn hit(&self, x: f32, y: f32) -> Option<&str> {
+        self.hits.iter().rev()
+            .find(|h| h.rect.contains(x, y))
+            .map(|h| h.path.as_str())
+    }
+}
+
+// === Measurement ===
+
+pub struct Metrics<'a> {
+    pub cell_w: f32,
+    pub cell_h: f32,
+    pub scale: f32,
+    pub icons: &'a IconSet,
+}
+
+impl<'a> Metrics<'a> {
+    pub fn text_w(&self, text: &str) -> f32 {
         let mut w = 0.0;
         for ch in text.chars() {
-            if ch == '\x01' || ch == '\x02' { continue; }
-            if crate::icons::IconSet::is_icon_char(ch) {
-                if let Some(pm) = icons.icon_for_char(ch) {
-                    w += pm.width() as f32 / scale;
+            if ch == '\x01' || ch == '\x02' {
+                continue;
+            }
+            if IconSet::is_icon_char(ch) {
+                if let Some(pm) = self.icons.icon_for_char(ch) {
+                    w += pm.width() as f32 / self.scale;
                 } else {
-                    w += cell_w;
+                    w += self.cell_w;
                 }
             } else {
-                let cw = ch.width().unwrap_or(1) as f32;
-                w += cell_w * cw;
+                w += self.cell_w * ch.width().unwrap_or(1) as f32;
             }
         }
         w
     }
 
-    pub fn flex(
-        groups: &[Vec<RenderedWidget>],
-        bar_width: f32,
-        icons: &crate::icons::IconSet,
-        cell_w: f32,
-        scale: f32,
-        gap_px: f32,
-        fg: Rgba,
-        _bg: Rgba,
-    ) -> Self {
-        let mut items = Vec::new();
-        let mut hit_areas = Vec::new();
+    pub fn icon_w(&self, pm: &Pixmap) -> f32 {
+        pm.width() as f32 / self.scale
+    }
 
-        if groups.is_empty() {
-            return Self { items, hit_areas };
+    pub fn elem_w(&self, elem: &Elem) -> f32 {
+        let icon_w = elem.icon.as_ref()
+            .map(|pm| self.icon_w(pm) + self.cell_w * 0.5)
+            .unwrap_or(0.0);
+        icon_w + self.text_w(&elem.text)
+    }
+
+    pub fn span_w(&self, span: &Span) -> f32 {
+        let n = span.elems.len();
+        if n == 0 {
+            return 0.0;
         }
+        let content: f32 = span.elems.iter().map(|e| self.elem_w(e)).sum();
+        let gaps = (n.saturating_sub(1)) as f32 * self.cell_w * 0.5;
+        content + gaps + 2.0 * span.pad
+    }
 
-        let group_widths: Vec<f32> = groups.iter().map(|group| {
-            let content: f32 = group.iter()
-                .map(|rw| Self::measure_with_icon(&rw.text, icons, cell_w, scale, rw.icon_pixmap.as_deref()))
-                .sum();
-            let gaps = group.len().saturating_sub(1) as f32 * gap_px;
-            content + gaps
-        }).collect();
+    fn zone_w(&self, zone: &Zone) -> f32 {
+        let n = zone.spans.len();
+        if n == 0 {
+            return 0.0;
+        }
+        let content: f32 = zone.spans.iter().map(|s| self.span_w(s)).sum();
+        let gaps = (n.saturating_sub(1)) as f32 * zone.gap;
+        content + gaps
+    }
+}
 
-        let total_width: f32 = group_widths.iter().sum();
-        let num_groups = groups.len();
+// === Layout algorithm ===
 
-        let group_gap = if num_groups > 1 && total_width < bar_width {
-            (bar_width - total_width) / (num_groups - 1) as f32
-        } else {
-            0.0
+pub fn lay(zones: &[Zone], bar_w: f32, bar_h: f32, m: &Metrics) -> Frame {
+    let mut spans = Vec::new();
+    let mut hits = Vec::new();
+    let elem_gap = m.cell_w * 0.5;
+
+    for zone in zones {
+        let zone_w = m.zone_w(zone);
+
+        // Zone anchor x
+        let zone_x = match zone.align {
+            Align::Left => 0.0,
+            Align::Center => (bar_w - zone_w) / 2.0,
+            Align::Right => bar_w - zone_w,
         };
 
-        let mut x = 0.0;
-        for (gi, group) in groups.iter().enumerate() {
-            if gi > 0 {
-                if num_groups == 3 && gi == 1 {
-                    x = (bar_width - group_widths[1]) / 2.0;
-                } else if gi == num_groups - 1 {
-                    x = bar_width - group_widths[gi];
-                } else {
-                    x += group_gap;
-                }
+        let mut sx = zone_x;
+        for (si, span) in zone.spans.iter().enumerate() {
+            if si > 0 {
+                sx += zone.gap;
             }
+            let span_w = m.span_w(span);
+            let span_rect = Rect { x: sx, y: 0.0, w: span_w, h: bar_h };
 
-            for (wi, rw) in group.iter().enumerate() {
-                if wi > 0 {
-                    x += gap_px;
+            // Position elems within span
+            let mut ex = sx + span.pad;
+            let mut felems = Vec::new();
+            for (ei, elem) in span.elems.iter().enumerate() {
+                if ei > 0 {
+                    ex += elem_gap;
                 }
+                let ew = m.elem_w(elem);
+                let elem_rect = Rect { x: ex, y: 0.0, w: ew, h: bar_h };
 
-                let w_fg = rw.fg.unwrap_or(fg);
-                let w_bg = rw.bg;
-                let item_w = Self::measure_with_icon(&rw.text, icons, cell_w, scale, rw.icon_pixmap.as_deref());
-
-                items.push(LayoutItem {
-                    x, width: item_w,
-                    text: rw.text.clone(),
-                    fg: w_fg, bg: w_bg,
-                    icon_pixmap: rw.icon_pixmap.clone(),
+                felems.push(FElem {
+                    rect: elem_rect,
+                    text: elem.text.clone(),
+                    fg: elem.fg,
+                    icon: elem.icon.clone(),
                 });
 
-                if rw.is_breadcrumb {
-                    hit_areas.push(HitArea {
-                        start_x: x, end_x: x + item_w,
-                        path: String::new(),
-                        is_breadcrumb: true,
-                    });
-                } else if let Some(path) = &rw.path {
-                    hit_areas.push(HitArea {
-                        start_x: x, end_x: x + item_w,
-                        path: path.clone(),
-                        is_breadcrumb: false,
-                    });
+                // Elem-level hit area (only if span has no path)
+                if span.path.is_none() {
+                    if let Some(ref p) = elem.path {
+                        hits.push(Hit { rect: elem_rect, path: p.clone() });
+                    }
                 }
 
-                x += item_w;
+                ex += ew;
             }
-        }
 
-        Self { items, hit_areas }
-    }
+            // Span-level hit area
+            if let Some(ref p) = span.path {
+                hits.push(Hit { rect: span_rect, path: p.clone() });
+            }
 
-    pub fn flex_text_mode(
-        prefix: Option<&RenderedWidget>,
-        query: &str,
-        items_list: &[(String, Vec<usize>)],
-        total: usize,
-        selected: usize,
-        shortcuts: &str,
-        bar_width: f32,
-        icons: &crate::icons::IconSet,
-        cell_w: f32,
-        scale: f32,
-        gap_px: f32,
-        fg: Rgba,
-        idle_fg: Rgba,
-        _bg: Rgba,
-    ) -> Self {
-        let mut items = Vec::new();
-        let selected = selected.min(items_list.len().saturating_sub(1));
-
-        let mut x = 0.0;
-
-        // Prefix icon
-        if let Some(pw) = prefix {
-            let prefix_w = Self::measure(&pw.text, icons, cell_w, scale);
-            items.push(LayoutItem {
-                x, width: prefix_w,
-                text: pw.text.clone(), fg, bg: None, icon_pixmap: None,
-            });
-            x += prefix_w + gap_px;
-        }
-
-        // Query with cursor
-        let query_display = format!("{}_", query);
-        let query_w = query_display.len() as f32 * cell_w;
-        items.push(LayoutItem {
-            x, width: query_w,
-            text: query_display, fg, bg: None, icon_pixmap: None,
-        });
-
-        // Count on right
-        let count_text = format!("{}/{}", items_list.len(), total);
-        let right_text = if shortcuts.is_empty() { count_text }
-            else { format!("{shortcuts}  {count_text}") };
-        let right_w = right_text.chars().map(|c| c.width().unwrap_or(1) as f32).sum::<f32>() * cell_w;
-        let right_x = bar_width - right_w;
-        items.push(LayoutItem {
-            x: right_x, width: right_w,
-            text: right_text, fg: idle_fg, bg: None, icon_pixmap: None,
-        });
-
-        // Items centered
-        let left_end = x + query_w + gap_px * 2.0;
-        let right_begin = right_x - gap_px * 2.0;
-        let avail = right_begin - left_end;
-        let pad_px = cell_w;
-
-        let item_widths: Vec<f32> = items_list.iter()
-            .map(|(t, _)| t.chars().map(|c| c.width().unwrap_or(1) as f32).sum::<f32>() * cell_w + pad_px * 2.0)
-            .collect();
-        let total_items_w: f32 = item_widths.iter().sum::<f32>()
-            + items_list.len().saturating_sub(1) as f32 * gap_px;
-
-        let center_start = if total_items_w <= avail {
-            left_end + (avail - total_items_w) / 2.0
-        } else {
-            left_end
-        };
-
-        let mut x = center_start;
-        for (i, (text, _)) in items_list.iter().enumerate() {
-            if i > 0 { x += gap_px; }
-            let is_sel = i == selected;
-            let item_fg = if is_sel { fg } else { idle_fg };
-            let item_w = item_widths[i];
-
-            items.push(LayoutItem {
-                x, width: item_w,
-                text: format!(" {} ", text),
-                fg: item_fg, bg: None, icon_pixmap: None,
+            spans.push(FSpan {
+                rect: span_rect,
+                bg: span.bg,
+                radius: span.radius,
+                opacity: span.opacity,
+                elems: felems,
             });
 
-            x += item_w;
+            sx += span_w;
         }
-
-        Self { items, hit_areas: Vec::new() }
     }
+
+    Frame { spans, hits }
 }

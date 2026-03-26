@@ -34,6 +34,8 @@ pub struct Settings {
     pub icon_weight: String,
     #[serde(default)]
     pub output_scales: HashMap<String, f32>,
+    #[serde(default)]
+    pub margin: u32,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq)]
@@ -195,6 +197,8 @@ struct RuntimeSettings {
     icon_weight: String,
     #[serde(default)]
     output_scales: HashMap<String, f32>,
+    #[serde(default)]
+    margin: u32,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -255,6 +259,7 @@ impl Config {
                     icons_dir: runtime.settings.icons_dir,
                     icon_weight: runtime.settings.icon_weight,
                     output_scales: runtime.settings.output_scales,
+                    margin: runtime.settings.margin,
                 },
                 bar: BarDef {
                     order,

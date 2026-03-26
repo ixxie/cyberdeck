@@ -1,7 +1,7 @@
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use smithay_client_toolkit::reexports::calloop::{LoopHandle, RegistrationToken};
 use smithay_client_toolkit::reexports::calloop::timer::{TimeoutAction, Timer};
@@ -45,7 +45,7 @@ use tiny_skia::Pixmap;
 
 use crate::color::Rgba;
 use crate::config::{Config, ModuleDef, Position};
-use crate::layout::HitArea;
+use crate::layout::{Frame, Metrics, Zone, lay};
 use crate::mods::InteractiveModule;
 use crate::render::Renderer;
 use crate::icons::IconSet;
@@ -70,7 +70,7 @@ pub struct BarInstance {
     pub configured: bool,
     pub output_name: Option<String>,
     pub output: WlOutput,
-    pub hit_areas: Vec<HitArea>,
+    pub frame: Option<Frame>,
 }
 
 impl BarInstance {
@@ -95,6 +95,12 @@ impl BarInstance {
             Position::Bottom => Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
         };
         layer_surface.set_anchor(anchor);
+        layer_surface.set_margin(
+            config.settings.margin as i32,
+            config.settings.margin as i32,
+            config.settings.margin as i32,
+            config.settings.margin as i32,
+        );
 
         layer_surface.set_size(0, bar_h);
         layer_surface.set_exclusive_zone(bar_h as i32);
@@ -120,7 +126,7 @@ impl BarInstance {
             configured: false,
             output_name,
             output: output.clone(),
-            hit_areas: Vec::new(),
+            frame: None,
         }
     }
 }
@@ -152,6 +158,7 @@ pub struct BarApp {
     pub badge_overrides: HashMap<String, RegistrationToken>,
     pub spotlight_token: Option<RegistrationToken>,
     pub interactive: HashMap<String, Box<dyn InteractiveModule>>,
+    pub nav_changed: Instant,
 }
 
 pub struct Toast {
@@ -160,6 +167,8 @@ pub struct Toast {
     pub icon: Option<String>,
     pub icon_pixmap: Option<std::sync::Arc<tiny_skia::Pixmap>>,
     pub token: RegistrationToken,
+    pub created: Instant,
+    pub lifetime: Duration,
 }
 
 const MAX_VISIBLE_TOASTS: usize = 3;
@@ -259,6 +268,7 @@ impl BarApp {
             badge_overrides: HashMap::new(),
             spotlight_token: None,
             interactive,
+            nav_changed: Instant::now(),
         }
     }
 
@@ -278,6 +288,7 @@ impl BarApp {
         let needs_kb = !(nav.stack.is_empty() && matches!(nav.mode, DisplayMode::Visual));
         log::info!("nav -> stack={:?} mode={:?} kb={}", nav.stack, nav.mode, needs_kb);
         self.nav = nav;
+        self.nav_changed = Instant::now();
         for bar in self.bars.values() {
             let interactivity = if needs_kb {
                 KeyboardInteractivity::Exclusive
@@ -291,11 +302,16 @@ impl BarApp {
     }
 
     pub fn maybe_redraw(&mut self) {
+        let animating = self.has_active_animations();
+        if animating {
+            self.dirty.set(true);
+        }
         if !self.dirty.get() {
             return;
         }
         self.process_hooks();
         let qh = self.qh.clone();
+        let nav_age = self.nav_changed.elapsed();
         let ids: Vec<u32> = self.bars.keys().copied().collect();
         let mut drew = false;
         for id in ids {
@@ -304,9 +320,10 @@ impl BarApp {
                     Self::draw_bar(
                         bar, &self.config, &mut self.renderer,
                         &self.template_engine, &self.states, &qh,
-                        &self.nav,
+                        &mut self.nav,
                         &self.toasts, &self.badge_overrides,
                         &self.interactive,
+                        nav_age,
                     );
                     drew = true;
                 }
@@ -315,6 +332,29 @@ impl BarApp {
         if drew {
             self.dirty.set(false);
         }
+    }
+
+    fn has_active_animations(&self) -> bool {
+        let fade_dur = Duration::from_millis(300);
+
+        // Nav transition
+        if self.nav_changed.elapsed() < fade_dur {
+            return true;
+        }
+
+        // Toast fade-in
+        for t in &self.toasts {
+            if t.created.elapsed() < fade_dur {
+                return true;
+            }
+            // Toast fade-out (last 500ms of lifetime)
+            let remaining = t.lifetime.saturating_sub(t.created.elapsed());
+            if remaining < Duration::from_millis(500) {
+                return true;
+            }
+        }
+
+        false
     }
 
     fn process_hooks(&mut self) {
@@ -407,6 +447,8 @@ impl BarApp {
             icon,
             icon_pixmap,
             token,
+            created: Instant::now(),
+            lifetime: Duration::from_secs(timeout),
         });
         self.dirty.set(true);
     }
@@ -476,21 +518,22 @@ impl BarApp {
         template_engine: &TemplateEngine,
         states: &Rc<std::cell::RefCell<HashMap<String, ModuleState>>>,
         qh: &QueueHandle<BarApp>,
-        nav: &NavState,
+        nav: &mut NavState,
         toasts: &[Toast],
         badge_overrides: &HashMap<String, RegistrationToken>,
         interactive: &HashMap<String, Box<dyn InteractiveModule>>,
+        nav_age: Duration,
     ) {
         if bar.width == 0 {
             return;
         }
 
         let bg = config.settings.background.color
-            .with_opacity(config.settings.background.opacity);
+            .with_opacity(config.settings.background.opacity * 0.85);
         let pal = Palette {
-            selected: Rgba::new(255, 255, 255, 230), // 90%
-            active: Rgba::new(255, 255, 255, 166),   // 65%
-            idle: Rgba::new(255, 255, 255, 102),     // 40%
+            selected: Rgba::new(255, 255, 255, 204), // 80%
+            active: Rgba::new(255, 255, 255, 140),   // 55%
+            idle: Rgba::new(255, 255, 255, 89),      // 35%
         };
 
         let output_mul = bar.output_name.as_ref()
@@ -498,34 +541,56 @@ impl BarApp {
             .copied()
             .unwrap_or(1.0);
         let bar_content_w = bar.width as f32 - (renderer.pad_left + renderer.pad_right) * output_mul;
-        let gap_px = renderer.cell_w * output_mul * 1.5;
+        let output_name = bar.output_name.as_deref();
+        let gap = renderer.cell_w * output_mul * 1.5;
 
-        let layout = if nav.stack.is_empty() && matches!(nav.mode, DisplayMode::Visual) {
-            crate::view::layout_root_visual(bar, config, template_engine, states, renderer, pal, bg, bar_content_w, output_mul, gap_px, badge_overrides, toasts)
+        // Pill bg = configured bar background; bar surface = transparent
+        let pill_bg = bg;
+        let surface_bg = Rgba::new(0, 0, 0, 0);
+
+        let bar_h = ((renderer.cell_h + 2.0 * renderer.padding) * output_mul).ceil() as u32;
+        let metrics = Metrics {
+            cell_w: renderer.cell_w * output_mul,
+            cell_h: renderer.cell_h * output_mul,
+            scale: bar.scale as f32 * output_mul,
+            icons: &bar.icons,
+        };
+
+        let zones: Vec<Zone> = if nav.stack.is_empty() && matches!(nav.mode, DisplayMode::Visual) {
+            let icon_h = (renderer.cell_h * bar.scale as f32).ceil() as u32;
+            crate::view::root_zones(config, template_engine, states, pal, output_name, badge_overrides, toasts, gap, pill_bg, icon_h, bar_content_w, &metrics)
         } else {
             match nav.mode {
                 DisplayMode::Visual => {
                     let mod_id = nav.stack.first().map(|s| s.as_str());
-                    crate::view::layout_module_view(
-                        mod_id,
-                        config, template_engine, states, bar, renderer, pal, bg, output_mul, bar_content_w, gap_px, interactive,
+                    crate::view::mod_zones(
+                        mod_id, config, template_engine, states, pal, output_name, interactive, gap, pill_bg,
                     ).unwrap_or_else(|| {
-                        crate::view::layout_text(bar, config, template_engine, states, nav, renderer, pal, bg, output_mul, bar_content_w, gap_px)
+                        crate::view::text_zones(nav, config, template_engine, states, pal, gap, pill_bg, bar_content_w, &metrics)
                     })
                 }
                 DisplayMode::Text => {
-                    crate::view::layout_text(bar, config, template_engine, states, nav, renderer, pal, bg, output_mul, bar_content_w, gap_px)
+                    crate::view::text_zones(nav, config, template_engine, states, pal, gap, pill_bg, bar_content_w, &metrics)
                 }
             }
         };
-        bar.hit_areas = layout.hit_areas.clone();
+        let mut frame = lay(&zones, bar_content_w, bar_h as f32, &metrics);
+
+        // Nav transition: ease-in over 300ms
+        let nav_fade = ease_out((nav_age.as_secs_f32() / 0.3).min(1.0));
+        if nav_fade < 1.0 {
+            for span in &mut frame.spans {
+                span.opacity *= nav_fade;
+            }
+        }
 
         let scale = bar.scale as u32;
-        let bar_h = ((renderer.cell_h + 2.0 * renderer.padding) * output_mul).ceil() as u32;
         let phys_w = bar.width * scale;
         let phys_h = bar_h * scale;
         let mut pixmap = Pixmap::new(phys_w.max(1), phys_h.max(1)).expect("failed to create pixmap");
-        renderer.render_layout(&layout, &mut pixmap, &bar.icons, bg, bar.scale, output_mul);
+        renderer.render_frame(&frame, &mut pixmap, &bar.icons, surface_bg, bar.scale, output_mul);
+
+        bar.frame = Some(frame);
 
         let stride = phys_w as i32 * 4;
         let format = smithay_client_toolkit::reexports::client::protocol::wl_shm::Format::Argb8888;
@@ -597,10 +662,8 @@ impl LayerShellHandler for BarApp {
     fn closed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, layer: &LayerSurface) {
         let id = self.bar_id_for_surface(layer.wl_surface());
         if let Some(id) = id {
+            log::info!("layer surface closed: removing bar {id}");
             self.bars.remove(&id);
-        }
-        if self.bars.is_empty() {
-            std::process::exit(0);
         }
     }
 
@@ -647,6 +710,9 @@ impl OutputHandler for BarApp {
             &self.config, &self.renderer, qh,
         );
         self.bars.insert(id, bar);
+
+        // Re-apply wallpaper so the new output isn't blank
+        Self::spawn_command("cyberdeck wallpaper init");
     }
 
     fn update_output(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _output: WlOutput) {}
@@ -784,3 +850,25 @@ delegate_shm!(BarApp);
 delegate_keyboard!(BarApp);
 delegate_pointer!(BarApp);
 delegate_layer!(BarApp);
+
+/// Smooth ease-out curve (decelerate)
+fn ease_out(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    1.0 - (1.0 - t).powi(3)
+}
+
+/// Compute toast opacity: fade in 300ms, fade out last 500ms
+pub fn toast_opacity(toast: &Toast) -> f32 {
+    let age = toast.created.elapsed().as_secs_f32();
+    let lifetime = toast.lifetime.as_secs_f32();
+    let remaining = (lifetime - age).max(0.0);
+
+    let fade_in = ease_out((age / 0.3).min(1.0));
+    let fade_out = if remaining < 0.5 {
+        ease_out(remaining / 0.5)
+    } else {
+        1.0
+    };
+
+    fade_in * fade_out
+}

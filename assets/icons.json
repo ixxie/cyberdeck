@@ -66,5 +66,7 @@
   "usb": "0xEB82",
   "copy": "0xE911",
   "arrow-up": "0xE847",
-  "arrow-down": "0xE841"
+  "arrow-down": "0xE841",
+  "caret-left": "0xE8A9",
+  "caret-right": "0xE8AB"
 }

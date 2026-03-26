@@ -4,8 +4,8 @@ use smithay_client_toolkit::seat::keyboard::{KeyEvent, Keysym};
 use crate::bar::BarApp;
 use crate::color::Rgba;
 use crate::config::KeyHintDef;
-use crate::layout::RenderedWidget;
-use crate::mods::InteractiveModule;
+use crate::layout::Elem;
+use crate::mods::{InteractiveModule, KeyResult};
 
 pub struct KeyboardDeep {
     cursor: usize,
@@ -35,13 +35,13 @@ impl KeyboardDeep {
 }
 
 impl InteractiveModule for KeyboardDeep {
-    fn render_center(&self, fg: Rgba, data: &Value) -> Vec<RenderedWidget> {
+    fn render_center(&self, fg: Rgba, data: &Value) -> Vec<Elem> {
         let active_fg = Rgba::new(fg.r, fg.g, fg.b, (fg.a as f32 * 0.72) as u8);
         let idle_fg = Rgba::new(fg.r, fg.g, fg.b, (fg.a as f32 * 0.44) as u8);
 
         let layouts = Self::layouts(data);
         if layouts.is_empty() {
-            return vec![RenderedWidget::new("no layouts".into()).with_fg(idle_fg)];
+            return vec![Elem::text("no layouts").fg(idle_fg)];
         }
 
         let active = Self::active_idx(data);
@@ -54,7 +54,7 @@ impl InteractiveModule for KeyboardDeep {
                 idle_fg
             };
             let prefix = if i == active { "●" } else { "○" };
-            RenderedWidget::new(format!("{prefix} {name}")).with_fg(item_fg)
+            Elem::text(format!("{prefix} {name}")).fg(item_fg)
         }).collect()
     }
 
@@ -70,28 +70,28 @@ impl InteractiveModule for KeyboardDeep {
         ]
     }
 
-    fn handle_key(&mut self, event: &KeyEvent, data: &Value) -> bool {
+    fn handle_key(&mut self, event: &KeyEvent, data: &Value) -> KeyResult {
         let count = Self::layouts(data).len();
         if count == 0 {
-            return false;
+            return KeyResult::Ignored;
         }
 
         match event.keysym {
             Keysym::Left => {
                 self.cursor = self.cursor.checked_sub(1).unwrap_or(count - 1);
-                true
+                KeyResult::Handled
             }
             Keysym::Right => {
                 self.cursor = (self.cursor + 1) % count;
-                true
+                KeyResult::Handled
             }
             Keysym::Return => {
                 BarApp::spawn_command(
                     &format!("swaymsg input type:keyboard xkb_switch_layout {}", self.cursor),
                 );
-                true
+                KeyResult::Action
             }
-            _ => false,
+            _ => KeyResult::Ignored,
         }
     }
 

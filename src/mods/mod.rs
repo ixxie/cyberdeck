@@ -32,7 +32,7 @@ use smithay_client_toolkit::seat::keyboard::KeyEvent;
 
 use crate::color::Rgba;
 use crate::config::KeyHintDef;
-use crate::layout::RenderedWidget;
+use crate::layout::Elem;
 use crate::source::SharedState;
 
 type PollFn = fn(&serde_json::Map<String, serde_json::Value>) -> serde_json::Value;
@@ -111,11 +111,18 @@ pub fn register<D: 'static>(
 
 // --- Deep Module trait ---
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum KeyResult {
+    Ignored,
+    Handled,
+    Action,
+}
+
 pub trait InteractiveModule {
-    fn render_center(&self, fg: Rgba, data: &serde_json::Value) -> Vec<RenderedWidget>;
+    fn render_center(&self, fg: Rgba, data: &serde_json::Value) -> Vec<Elem>;
     fn breadcrumb(&self) -> Vec<String>;
     fn key_hints(&self) -> Vec<KeyHintDef>;
-    fn handle_key(&mut self, event: &KeyEvent, data: &serde_json::Value) -> bool;
+    fn handle_key(&mut self, event: &KeyEvent, data: &serde_json::Value) -> KeyResult;
     fn reset(&mut self);
 }
 

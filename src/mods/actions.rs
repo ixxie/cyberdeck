@@ -3,8 +3,8 @@ use smithay_client_toolkit::seat::keyboard::{KeyEvent, Keysym};
 use crate::bar::BarApp;
 use crate::color::Rgba;
 use crate::config::KeyHintDef;
-use crate::layout::RenderedWidget;
-use crate::mods::InteractiveModule;
+use crate::layout::Elem;
+use crate::mods::{InteractiveModule, KeyResult};
 
 struct Action {
     key: String,
@@ -42,7 +42,7 @@ impl ActionPalette {
 }
 
 impl InteractiveModule for ActionPalette {
-    fn render_center(&self, fg: Rgba, _data: &serde_json::Value) -> Vec<RenderedWidget> {
+    fn render_center(&self, fg: Rgba, _data: &serde_json::Value) -> Vec<Elem> {
         let idle_fg = Rgba::new(fg.r, fg.g, fg.b, (fg.a as f32 * 0.44) as u8);
 
         self.actions.iter().enumerate().map(|(i, action)| {
@@ -53,7 +53,7 @@ impl InteractiveModule for ActionPalette {
                 text.push(' ');
             }
             text.push_str(&format!("{} ({})", action.label, action.key));
-            RenderedWidget::new(text).with_fg(item_fg)
+            Elem::text(text).fg(item_fg)
         }).collect()
     }
 
@@ -69,33 +69,33 @@ impl InteractiveModule for ActionPalette {
         ]
     }
 
-    fn handle_key(&mut self, event: &KeyEvent, _data: &serde_json::Value) -> bool {
+    fn handle_key(&mut self, event: &KeyEvent, _data: &serde_json::Value) -> KeyResult {
         let count = self.actions.len();
-        if count == 0 { return false; }
+        if count == 0 { return KeyResult::Ignored; }
 
         match event.keysym {
             Keysym::Left => {
                 self.cursor = self.cursor.checked_sub(1).unwrap_or(count - 1);
-                true
+                KeyResult::Handled
             }
             Keysym::Right => {
                 self.cursor = (self.cursor + 1) % count;
-                true
+                KeyResult::Handled
             }
             Keysym::Return => {
                 if let Some(action) = self.actions.get(self.cursor) {
                     BarApp::spawn_command(&action.command);
                 }
-                true
+                KeyResult::Action
             }
             _ => {
                 if let Some(ch) = event.utf8.as_deref() {
                     if let Some(action) = self.actions.iter().find(|a| a.key == ch) {
                         BarApp::spawn_command(&action.command);
-                        return true;
+                        return KeyResult::Action;
                     }
                 }
-                false
+                KeyResult::Ignored
             }
         }
     }

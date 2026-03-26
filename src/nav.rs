@@ -16,6 +16,7 @@ pub struct NavState {
     pub mode: DisplayMode,
     pub query: String,
     pub selected: usize,
+    pub scroll: usize,
 }
 
 impl NavState {
@@ -25,6 +26,7 @@ impl NavState {
             mode: DisplayMode::Visual,
             query: String::new(),
             selected: 0,
+            scroll: 0,
         }
     }
 
@@ -72,7 +74,11 @@ impl BarApp {
                     .get(&mod_id)
                     .map(|s| s.data.clone())
                     .unwrap_or(serde_json::Value::Null);
-                if deep.handle_key(&event, &data) {
+                let result = deep.handle_key(&event, &data);
+                if result != crate::mods::KeyResult::Ignored {
+                    if result == crate::mods::KeyResult::Action {
+                        self.source_mgr.nudge(&mod_id);
+                    }
                     self.dirty.set(true);
                     return;
                 }
@@ -150,6 +156,7 @@ impl BarApp {
         if event.keysym == Keysym::BackSpace {
             self.nav.query.pop();
             self.nav.selected = 0;
+            self.nav.scroll = 0;
             self.dirty.set(true);
             self.check_auto_enter();
             return;
@@ -159,6 +166,7 @@ impl BarApp {
             if !s.is_empty() && s.chars().all(|c| !c.is_control()) {
                 self.nav.query.push_str(s);
                 self.nav.selected = 0;
+                self.nav.scroll = 0;
                 self.dirty.set(true);
                 self.check_auto_enter();
             }
@@ -208,33 +216,47 @@ impl BarApp {
         }
     }
 
-    pub(crate) fn handle_click(&mut self, surface: &smithay_client_toolkit::reexports::client::protocol::wl_surface::WlSurface, x: f64, _y: f64) {
+    pub(crate) fn handle_click(&mut self, surface: &smithay_client_toolkit::reexports::client::protocol::wl_surface::WlSurface, x: f64, y: f64) {
         let Some(bar_id) = self.bar_id_for_surface(surface) else { return };
         let Some(bar) = self.bars.get(&bar_id) else { return };
 
         let px = x as f32 - self.renderer.pad_left;
+        let py = y as f32;
 
-        for hit in &bar.hit_areas {
-            if px >= hit.start_x && px < hit.end_x {
-                if hit.is_breadcrumb {
-                    log::info!("breadcrumb click -> root");
-                    self.set_nav(NavState::new());
-                    return;
-                }
+        let Some(frame) = &bar.frame else { return };
+        let Some(path) = frame.hit(px, py) else { return };
 
-                log::info!("click hit: {} (x={:.0})", hit.path, px);
+        log::info!("click hit: {} (x={:.0})", path, px);
 
-                if hit.path == "launcher" {
-                    self.set_nav(NavState::text());
-                    return;
-                }
+        if path == "__back" {
+            self.set_nav(NavState::new());
+            return;
+        }
 
-                if let Some(module) = self.config.bar.modules.get(&hit.path) {
-                    let mode = if module.has_view() { DisplayMode::Visual } else { DisplayMode::Text };
-                    self.set_nav(NavState::module(&hit.path, mode));
-                }
-                return;
-            }
+        if path == "launcher" {
+            self.set_nav(NavState::text());
+            return;
+        }
+
+        if path == "overview" {
+            Self::spawn_command("niri msg action toggle-overview");
+            return;
+        }
+
+        if path == "__scroll_left" {
+            self.nav.scroll = self.nav.scroll.saturating_sub(1);
+            self.dirty.set(true);
+            return;
+        }
+        if path == "__scroll_right" {
+            self.nav.scroll += 1;
+            self.dirty.set(true);
+            return;
+        }
+
+        if let Some(module) = self.config.bar.modules.get(path) {
+            let mode = if module.has_view() { DisplayMode::Visual } else { DisplayMode::Text };
+            self.set_nav(NavState::module(path, mode));
         }
     }
 

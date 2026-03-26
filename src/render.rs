@@ -3,11 +3,11 @@ use std::collections::HashMap;
 use cosmic_text::{
     Attrs, Buffer, Color, Family, FontSystem, Metrics, Shaping, SwashCache,
 };
-use tiny_skia::Pixmap;
+use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Transform};
 
 use unicode_width::UnicodeWidthChar;
 
-use crate::layout::Layout;
+use crate::layout::Frame;
 use crate::icons::IconSet;
 
 pub struct Renderer {
@@ -55,8 +55,8 @@ impl Renderer {
             cell_w,
             cell_h,
             padding,
-            pad_left: pad_left.unwrap_or(padding),
-            pad_right: pad_right.unwrap_or(padding),
+            pad_left: pad_left.unwrap_or(0.0),
+            pad_right: pad_right.unwrap_or(0.0),
             font_size,
             font_family: font_family.to_string(),
             shaped_cache: HashMap::new(),
@@ -67,8 +67,8 @@ impl Renderer {
         (self.cell_h + 2.0 * self.padding).ceil() as u32
     }
 
-    pub fn render_layout(
-        &mut self, layout: &Layout, pixmap: &mut Pixmap,
+    pub fn render_frame(
+        &mut self, frame: &Frame, pixmap: &mut Pixmap,
         icons: &IconSet, bg: crate::color::Rgba, scale: i32, output_mul: f32,
     ) {
         // Fill background
@@ -96,98 +96,106 @@ impl Renderer {
         let pad_v = self.padding * sf * mul;
         let font_size = self.font_size * sf * mul;
 
-        // Render each layout item
-        for item in &layout.items {
-            let item_x = pad_left + item.x * sf;
-            let item_y = pad_v;
-            let item_w = item.width * sf;
+        // Render each span
+        for fspan in &frame.spans {
+            let span_x = pad_left + fspan.rect.x * sf;
+            let span_w = fspan.rect.w * sf;
+            let span_h = fspan.rect.h * sf;
 
-            // Fill item background if set
-            if let Some(ibg) = item.bg {
-                let x0 = item_x as u32;
-                let y0 = 0u32;
-                let x1 = (item_x + item_w).ceil() as u32;
-                let y1 = h;
-                let data = pixmap.data_mut();
-                for py in y0..y1.min(h) {
-                    for px in x0..x1.min(w) {
-                        let idx = (py * w + px) as usize * 4;
-                        if idx + 3 < data.len() {
-                            data[idx] = ibg.r;
-                            data[idx + 1] = ibg.g;
-                            data[idx + 2] = ibg.b;
-                            data[idx + 3] = ibg.a;
-                        }
+            let span_opacity = fspan.opacity;
+
+            // Draw rounded rect background
+            if let Some(sbg) = fspan.bg {
+                let radius = fspan.radius * sf;
+                let bg_a = (sbg.a as f32 * span_opacity) as u8;
+                if bg_a > 0 {
+                    if let Some(path) = rounded_rect_path(span_x, 0.0, span_w, span_h, radius) {
+                        let mut paint = Paint::default();
+                        paint.set_color_rgba8(sbg.r, sbg.g, sbg.b, bg_a);
+                        paint.anti_alias = true;
+                        pixmap.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
                     }
                 }
             }
 
-            // Render inline icon pixmap (e.g. notification app icon)
-            let mut cx = item_x;
-            if let Some(ref icon_pm) = item.icon_pixmap {
-                let icon_w = icon_pm.width() as f32;
-                let icon_h = icon_pm.height() as f32;
-                let dy = item_y + (cell_h - icon_h) / 2.0;
-                Self::composite_icon_at(
-                    pixmap.data_mut(), w, h,
-                    icon_pm, cx as i32, dy as i32, item.fg,
-                );
-                cx += icon_w + cell_w * 0.5; // gap after icon
-            }
+            if span_opacity <= 0.0 { continue; }
 
-            // Walk through the text, splitting into icon and text segments
-            let mut dim = false;
-            let mut text_run = String::new();
-            let mut text_run_start = cx;
-            let mut text_fg = item.fg;
+            // Render each element within the span
+            for felem in &fspan.elems {
+                let elem_x = pad_left + felem.rect.x * sf;
+                let elem_y = pad_v;
 
-            for ch in item.text.chars() {
-                if ch == '\x01' { dim = true; continue; }
-                if ch == '\x02' { dim = false; continue; }
+                // Apply span opacity to element fg
+                let mut fg = felem.fg;
+                fg.a = (fg.a as f32 * span_opacity) as u8;
+                if fg.a == 0 { continue; }
 
-                let mut fg = item.fg;
-                if dim {
-                    fg.a = (fg.a as f32 * 0.615) as u8; // dim to idle
+                let mut cx = elem_x;
+
+                // Render inline icon pixmap
+                if let Some(ref icon_pm) = felem.icon {
+                    let icon_w = icon_pm.width() as f32;
+                    let icon_h = icon_pm.height() as f32;
+                    let dy = elem_y + (cell_h - icon_h) / 2.0;
+                    Self::composite_icon_at(
+                        pixmap.data_mut(), w, h,
+                        icon_pm, cx as i32, dy as i32, fg,
+                    );
+                    cx += icon_w + cell_w * 0.5;
                 }
 
-                if IconSet::is_icon_char(ch) {
-                    // Flush pending text
-                    let run_w = self.draw_text_run(pixmap, &text_run, text_run_start, item_y, font_size, cell_h, text_fg);
-                    cx = text_run_start + run_w;
-                    text_run.clear();
+                // Walk text characters
+                let mut dim = false;
+                let mut text_run = String::new();
+                let mut text_run_start = cx;
+                let mut text_fg = fg;
 
-                    if let Some(icon_pm) = icons.icon_for_char(ch) {
-                        let icon_w = icon_pm.width() as f32;
-                        let icon_h = icon_pm.height() as f32;
-                        let dy = item_y + (cell_h - icon_h) / 2.0;
-                        Self::composite_icon_at(
-                            pixmap.data_mut(), w, h,
-                            icon_pm, cx as i32, dy as i32, fg,
-                        );
-                        cx += icon_w;
-                    } else {
-                        cx += cell_w;
+                for ch in felem.text.chars() {
+                    if ch == '\x01' { dim = true; continue; }
+                    if ch == '\x02' { dim = false; continue; }
+
+                    let mut char_fg = fg;
+                    if dim {
+                        char_fg.a = (char_fg.a as f32 * 0.615) as u8;
                     }
-                    text_run_start = cx;
-                    text_fg = fg;
-                } else {
-                    if text_run.is_empty() {
-                        text_run_start = cx;
-                        text_fg = fg;
-                    } else if fg != text_fg {
-                        // fg changed, flush
-                        let run_w = self.draw_text_run(pixmap, &text_run, text_run_start, item_y, font_size, cell_h, text_fg);
+
+                    if IconSet::is_icon_char(ch) {
+                        let run_w = self.draw_text_run(pixmap, &text_run, text_run_start, elem_y, font_size, cell_h, text_fg);
                         cx = text_run_start + run_w;
                         text_run.clear();
+
+                        if let Some(icon_pm) = icons.icon_for_char(ch) {
+                            let icon_w = icon_pm.width() as f32;
+                            let icon_h = icon_pm.height() as f32;
+                            let dy = elem_y + (cell_h - icon_h) / 2.0;
+                            Self::composite_icon_at(
+                                pixmap.data_mut(), w, h,
+                                icon_pm, cx as i32, dy as i32, char_fg,
+                            );
+                            cx += icon_w;
+                        } else {
+                            cx += cell_w;
+                        }
                         text_run_start = cx;
-                        text_fg = fg;
+                        text_fg = char_fg;
+                    } else {
+                        if text_run.is_empty() {
+                            text_run_start = cx;
+                            text_fg = char_fg;
+                        } else if char_fg != text_fg {
+                            let run_w = self.draw_text_run(pixmap, &text_run, text_run_start, elem_y, font_size, cell_h, text_fg);
+                            cx = text_run_start + run_w;
+                            text_run.clear();
+                            text_run_start = cx;
+                            text_fg = char_fg;
+                        }
+                        text_run.push(ch);
+                        cx += cell_w * ch.width().unwrap_or(1) as f32;
                     }
-                    text_run.push(ch);
-                    cx += cell_w * ch.width().unwrap_or(1) as f32;
                 }
+                // Flush remaining text
+                self.draw_text_run(pixmap, &text_run, text_run_start, elem_y, font_size, cell_h, text_fg);
             }
-            // Flush remaining text
-            self.draw_text_run(pixmap, &text_run, text_run_start, item_y, font_size, cell_h, text_fg);
         }
     }
 
@@ -197,7 +205,7 @@ impl Renderer {
     ) -> f32 {
         if text.is_empty() { return 0.0; }
 
-        let scale = (font_size * 100.0) as i32; // use font_size as proxy for scale
+        let scale = (font_size * 100.0) as i32;
         let buf = self.shaped_cache.entry((text.to_string(), scale)).or_insert_with(|| {
             let metrics = Metrics::new(font_size, cell_h);
             let mut buf = Buffer::new(&mut self.font_system, metrics);
@@ -213,7 +221,6 @@ impl Renderer {
             buf
         });
 
-        // Compute actual shaped width from glyph layout
         let shaped_w: f32 = buf.layout_runs()
             .flat_map(|run| run.glyphs.iter())
             .map(|g| g.w)
@@ -240,7 +247,6 @@ impl Renderer {
         shaped_w
     }
 
-    // Icon compositing at exact pixel position, respecting fg alpha
     fn composite_icon_at(
         data: &mut [u8],
         buf_w: u32, buf_h: u32,
@@ -300,7 +306,6 @@ impl Renderer {
         }
     }
 
-    // Copy RGBA pixmap → Wayland premultiplied ARGB8888 (BGRA byte order) canvas
     pub fn copy_to_wl_buffer(pixmap: &Pixmap, canvas: &mut [u8]) {
         let src = pixmap.data();
         let len = canvas.len().min(src.len());
@@ -322,4 +327,47 @@ impl Renderer {
             i += 4;
         }
     }
+}
+
+fn rounded_rect_path(x: f32, y: f32, w: f32, h: f32, r: f32) -> Option<tiny_skia::Path> {
+    if w <= 0.0 || h <= 0.0 {
+        return None;
+    }
+    let r = r.min(w / 2.0).min(h / 2.0);
+    if r <= 0.0 {
+        // Simple rect
+        let mut pb = PathBuilder::new();
+        pb.move_to(x, y);
+        pb.line_to(x + w, y);
+        pb.line_to(x + w, y + h);
+        pb.line_to(x, y + h);
+        pb.close();
+        return pb.finish();
+    }
+
+    // Kappa for circular arcs approximated with cubic beziers
+    let k = 0.5522847498;
+    let kr = k * r;
+
+    let mut pb = PathBuilder::new();
+    // Start at top-left after the corner radius
+    pb.move_to(x + r, y);
+    // Top edge
+    pb.line_to(x + w - r, y);
+    // Top-right corner
+    pb.cubic_to(x + w - r + kr, y, x + w, y + r - kr, x + w, y + r);
+    // Right edge
+    pb.line_to(x + w, y + h - r);
+    // Bottom-right corner
+    pb.cubic_to(x + w, y + h - r + kr, x + w - r + kr, y + h, x + w - r, y + h);
+    // Bottom edge
+    pb.line_to(x + r, y + h);
+    // Bottom-left corner
+    pb.cubic_to(x + r - kr, y + h, x, y + h - r + kr, x, y + h - r);
+    // Left edge
+    pb.line_to(x, y + r);
+    // Top-left corner
+    pb.cubic_to(x, y + r - kr, x + r - kr, y, x + r, y);
+    pb.close();
+    pb.finish()
 }

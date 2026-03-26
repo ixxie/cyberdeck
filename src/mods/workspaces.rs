@@ -3,7 +3,8 @@ use std::process::Command;
 
 pub fn poll(_params: &serde_json::Map<String, Value>) -> Value {
     let ws = get_workspaces();
-    json!({ "workspaces": ws })
+    let wins = get_windows();
+    json!({ "workspaces": ws, "windows": wins })
 }
 
 fn get_workspaces() -> Vec<Value> {
@@ -31,6 +32,7 @@ fn get_workspaces() -> Vec<Value> {
                 .map(String::from)
                 .unwrap_or_else(|| idx.to_string());
             let active = ws.get("is_active").and_then(|v| v.as_bool()).unwrap_or(false);
+            let focused = ws.get("is_focused").and_then(|v| v.as_bool()).unwrap_or(false);
             let output = ws.get("output")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
@@ -43,6 +45,7 @@ fn get_workspaces() -> Vec<Value> {
                 "idx": idx,
                 "name": name,
                 "active": active,
+                "focused": focused,
                 "output": output,
                 "active_window": active_window,
             })
@@ -53,6 +56,60 @@ fn get_workspaces() -> Vec<Value> {
     result
 }
 
+fn get_windows() -> Vec<Value> {
+    let out = Command::new("niri")
+        .args(["msg", "--json", "windows"])
+        .output();
+
+    let Ok(out) = out else { return vec![] };
+    if !out.status.success() {
+        return vec![];
+    }
+
+    let text = String::from_utf8_lossy(&out.stdout);
+    let Ok(win_list) = serde_json::from_str::<Vec<Value>>(text.trim()) else {
+        return vec![];
+    };
+
+    win_list.iter().map(|w| {
+        let ws_id = w.get("workspace_id").and_then(|v| v.as_i64()).unwrap_or(0);
+        let focused = w.get("is_focused").and_then(|v| v.as_bool()).unwrap_or(false);
+        let floating = w.get("is_floating").and_then(|v| v.as_bool()).unwrap_or(false);
+
+        let layout = w.get("layout");
+        let tile_w = layout.and_then(|l| l.get("tile_size"))
+            .and_then(|s| s.as_array())
+            .and_then(|a| a.first())
+            .and_then(|v| v.as_f64())
+            .unwrap_or(400.0);
+        let tile_h = layout.and_then(|l| l.get("tile_size"))
+            .and_then(|s| s.as_array())
+            .and_then(|a| a.get(1))
+            .and_then(|v| v.as_f64())
+            .unwrap_or(300.0);
+        let col = layout.and_then(|l| l.get("pos_in_scrolling_layout"))
+            .and_then(|p| p.as_array())
+            .and_then(|a| a.first())
+            .and_then(|v| v.as_i64())
+            .unwrap_or(1);
+        let row = layout.and_then(|l| l.get("pos_in_scrolling_layout"))
+            .and_then(|p| p.as_array())
+            .and_then(|a| a.get(1))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(1);
+
+        json!({
+            "workspace_id": ws_id,
+            "focused": focused,
+            "floating": floating,
+            "col": col,
+            "row": row,
+            "w": tile_w,
+            "h": tile_h,
+        })
+    }).collect()
+}
+
 fn fallback() -> Vec<Value> {
-    vec![json!({"id": 1, "idx": 1, "name": "1", "active": true, "output": "", "active_window": null})]
+    vec![json!({"id": 1, "idx": 1, "name": "1", "active": true, "focused": false, "output": "", "active_window": null})]
 }

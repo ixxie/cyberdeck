@@ -6,8 +6,8 @@ use smithay_client_toolkit::seat::keyboard::{KeyEvent, Keysym};
 use crate::bar::BarApp;
 use crate::color::Rgba;
 use crate::config::KeyHintDef;
-use crate::layout::RenderedWidget;
-use crate::mods::InteractiveModule;
+use crate::layout::Elem;
+use crate::mods::{InteractiveModule, KeyResult};
 
 pub fn poll(_params: &serde_json::Map<String, Value>) -> Value {
     let out = Command::new("playerctl")
@@ -54,7 +54,7 @@ impl MediaDeep {
 }
 
 impl InteractiveModule for MediaDeep {
-    fn render_center(&self, fg: Rgba, data: &Value) -> Vec<RenderedWidget> {
+    fn render_center(&self, fg: Rgba, data: &Value) -> Vec<Elem> {
         let idle_fg = Rgba::new(fg.r, fg.g, fg.b, (fg.a as f32 * 0.44) as u8);
 
         let title = data.get("title").and_then(|v| v.as_str()).unwrap_or("");
@@ -62,7 +62,7 @@ impl InteractiveModule for MediaDeep {
         let status = data.get("status").and_then(|v| v.as_str()).unwrap_or("Stopped");
 
         if title.is_empty() {
-            return vec![RenderedWidget::new("no media".into()).with_fg(idle_fg)];
+            return vec![Elem::text("no media").fg(idle_fg)];
         }
 
         let icon = if status == "Playing" { "▶" } else { "⏸" };
@@ -72,7 +72,7 @@ impl InteractiveModule for MediaDeep {
             format!("{icon} {title}")
         };
 
-        vec![RenderedWidget::new(label).with_fg(fg)]
+        vec![Elem::text(label).fg(fg)]
     }
 
     fn breadcrumb(&self) -> Vec<String> {
@@ -88,29 +88,29 @@ impl InteractiveModule for MediaDeep {
         ]
     }
 
-    fn handle_key(&mut self, event: &KeyEvent, _data: &Value) -> bool {
+    fn handle_key(&mut self, event: &KeyEvent, _data: &Value) -> KeyResult {
         match event.keysym {
             _ if event.utf8.as_deref() == Some("p") => {
                 BarApp::spawn_command("playerctl play-pause");
-                true
+                KeyResult::Action
             }
             _ if event.utf8.as_deref() == Some("[") => {
                 BarApp::spawn_command("playerctl previous");
-                true
+                KeyResult::Action
             }
             _ if event.utf8.as_deref() == Some("]") => {
                 BarApp::spawn_command("playerctl next");
-                true
+                KeyResult::Action
             }
             Keysym::Left => {
                 BarApp::spawn_command("playerctl previous");
-                true
+                KeyResult::Action
             }
             Keysym::Right => {
                 BarApp::spawn_command("playerctl next");
-                true
+                KeyResult::Action
             }
-            _ => false,
+            _ => KeyResult::Ignored,
         }
     }
 

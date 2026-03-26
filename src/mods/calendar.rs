@@ -4,8 +4,8 @@ use smithay_client_toolkit::seat::keyboard::{KeyEvent, Keysym};
 
 use crate::color::Rgba;
 use crate::config::KeyHintDef;
-use crate::layout::RenderedWidget;
-use crate::mods::InteractiveModule;
+use crate::layout::Elem;
+use crate::mods::{InteractiveModule, KeyResult};
 
 pub fn poll(_params: &serde_json::Map<String, Value>) -> Value {
     let now = Local::now();
@@ -48,7 +48,7 @@ impl CalendarDeep {
 }
 
 impl InteractiveModule for CalendarDeep {
-    fn render_center(&self, fg: Rgba, _data: &serde_json::Value) -> Vec<RenderedWidget> {
+    fn render_center(&self, fg: Rgba, _data: &serde_json::Value) -> Vec<Elem> {
         let highlight_fg = Rgba::new(fg.r, fg.g, fg.b, (fg.a as f32 * 0.72) as u8); // active
         let idle_fg = Rgba::new(fg.r, fg.g, fg.b, (fg.a as f32 * 0.44) as u8);     // idle
         let today = Local::now().date_naive();
@@ -92,7 +92,7 @@ impl InteractiveModule for CalendarDeep {
         }
     }
 
-    fn handle_key(&mut self, event: &KeyEvent, _data: &serde_json::Value) -> bool {
+    fn handle_key(&mut self, event: &KeyEvent, _data: &serde_json::Value) -> KeyResult {
         match self.level {
             CalendarLevel::Week => match event.keysym {
                 Keysym::Left => {
@@ -102,7 +102,7 @@ impl InteractiveModule for CalendarDeep {
                     } else {
                         self.cursor -= 1;
                     }
-                    true
+                    KeyResult::Handled
                 }
                 Keysym::Right => {
                     if self.cursor >= 6 {
@@ -111,7 +111,7 @@ impl InteractiveModule for CalendarDeep {
                     } else {
                         self.cursor += 1;
                     }
-                    true
+                    KeyResult::Handled
                 }
                 Keysym::Up => {
                     let today = Local::now().date_naive();
@@ -122,13 +122,13 @@ impl InteractiveModule for CalendarDeep {
                     self.month = week_start.month();
                     self.cursor = (week_start.month() - 1) as usize;
                     self.level = CalendarLevel::Month;
-                    true
+                    KeyResult::Handled
                 }
                 _ if event.utf8.as_deref() == Some("t") => {
                     self.reset();
-                    true
+                    KeyResult::Handled
                 }
-                _ => false,
+                _ => KeyResult::Ignored,
             },
             CalendarLevel::Month => match event.keysym {
                 Keysym::Left => {
@@ -138,7 +138,7 @@ impl InteractiveModule for CalendarDeep {
                     } else {
                         self.cursor -= 1;
                     }
-                    true
+                    KeyResult::Handled
                 }
                 Keysym::Right => {
                     if self.cursor >= 11 {
@@ -147,12 +147,12 @@ impl InteractiveModule for CalendarDeep {
                     } else {
                         self.cursor += 1;
                     }
-                    true
+                    KeyResult::Handled
                 }
                 Keysym::Up => {
                     self.cursor = 2;
                     self.level = CalendarLevel::Year;
-                    true
+                    KeyResult::Handled
                 }
                 Keysym::Down | Keysym::Return => {
                     let selected_month = (self.cursor + 1) as u32;
@@ -165,13 +165,13 @@ impl InteractiveModule for CalendarDeep {
                     let weeks = (target_monday - today_monday).num_weeks() as i32;
                     self.week_offset = weeks;
                     self.level = CalendarLevel::Week;
-                    true
+                    KeyResult::Handled
                 }
                 _ if event.utf8.as_deref() == Some("t") => {
                     self.reset();
-                    true
+                    KeyResult::Handled
                 }
-                _ => false,
+                _ => KeyResult::Ignored,
             },
             CalendarLevel::Year => match event.keysym {
                 Keysym::Left => {
@@ -181,7 +181,7 @@ impl InteractiveModule for CalendarDeep {
                     } else {
                         self.cursor -= 1;
                     }
-                    true
+                    KeyResult::Handled
                 }
                 Keysym::Right => {
                     if self.cursor >= 4 {
@@ -190,7 +190,7 @@ impl InteractiveModule for CalendarDeep {
                     } else {
                         self.cursor += 1;
                     }
-                    true
+                    KeyResult::Handled
                 }
                 Keysym::Down | Keysym::Return => {
                     let center_year = self.year + self.year_page;
@@ -198,13 +198,13 @@ impl InteractiveModule for CalendarDeep {
                     self.year_page = 0;
                     self.cursor = 0;
                     self.level = CalendarLevel::Month;
-                    true
+                    KeyResult::Handled
                 }
                 _ if event.utf8.as_deref() == Some("t") => {
                     self.reset();
-                    true
+                    KeyResult::Handled
                 }
-                _ => false,
+                _ => KeyResult::Ignored,
             },
         }
     }
@@ -225,7 +225,7 @@ impl CalendarDeep {
         &self,
         active_fg: Rgba, highlight_fg: Rgba, idle_fg: Rgba,
         today: chrono::NaiveDate,
-    ) -> Vec<RenderedWidget> {
+    ) -> Vec<Elem> {
         let dow_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
         let month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                            "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -235,7 +235,7 @@ impl CalendarDeep {
             + chrono::Duration::weeks(self.week_offset as i64);
 
         let context = format!("{} {}", month_names[(week_start.month() - 1) as usize], week_start.year());
-        let mut widgets = vec![RenderedWidget::new(context).with_fg(highlight_fg)];
+        let mut widgets = vec![Elem::text(context).fg(highlight_fg)];
 
         for i in 0..7usize {
             let date = week_start + chrono::Duration::days(i as i64);
@@ -248,7 +248,7 @@ impl CalendarDeep {
                 idle_fg
             };
             let entry = format!("{} {:02}", dow_names[dow], date.day());
-            widgets.push(RenderedWidget::new(entry).with_fg(day_fg));
+            widgets.push(Elem::text(entry).fg(day_fg));
         }
 
         widgets
@@ -258,11 +258,11 @@ impl CalendarDeep {
         &self,
         active_fg: Rgba, highlight_fg: Rgba, idle_fg: Rgba,
         today: chrono::NaiveDate,
-    ) -> Vec<RenderedWidget> {
+    ) -> Vec<Elem> {
         let month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                            "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-        let mut widgets = vec![RenderedWidget::new(format!("{}", self.year)).with_fg(highlight_fg)];
+        let mut widgets = vec![Elem::text(format!("{}", self.year)).fg(highlight_fg)];
 
         for m in 0..12usize {
             let is_current = self.year == today.year() && (m + 1) as u32 == today.month();
@@ -273,7 +273,7 @@ impl CalendarDeep {
             } else {
                 idle_fg
             };
-            widgets.push(RenderedWidget::new(month_names[m].to_string()).with_fg(m_fg));
+            widgets.push(Elem::text(month_names[m].to_string()).fg(m_fg));
         }
 
         widgets
@@ -283,7 +283,7 @@ impl CalendarDeep {
         &self,
         active_fg: Rgba, highlight_fg: Rgba, idle_fg: Rgba,
         today: chrono::NaiveDate,
-    ) -> Vec<RenderedWidget> {
+    ) -> Vec<Elem> {
         let center_year = self.year + self.year_page;
         let mut widgets = Vec::new();
 
@@ -297,7 +297,7 @@ impl CalendarDeep {
             } else {
                 idle_fg
             };
-            widgets.push(RenderedWidget::new(format!("{y}")).with_fg(y_fg));
+            widgets.push(Elem::text(format!("{y}")).fg(y_fg));
         }
 
         widgets

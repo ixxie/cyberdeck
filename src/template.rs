@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use tera::{Context, Tera, Value};
 
 use crate::config::{BarDef, WidgetDef};
-use crate::layout::RenderedWidget;
+use crate::layout::Elem;
 
 pub struct TemplateEngine {
     tera: Tera,
@@ -226,7 +226,7 @@ impl TemplateEngine {
         data: &serde_json::Value,
         output_name: Option<&str>,
         highlighted: bool,
-    ) -> Option<RenderedWidget> {
+    ) -> Option<Elem> {
         let tpl_path = format!("{mod_id}.badge.{badge_name}");
 
         // Skip condition check when highlighted (override active)
@@ -254,7 +254,7 @@ impl TemplateEngine {
         ctx.insert("__output", &output_name.unwrap_or(""));
         match self.tera.render(&name, &ctx) {
             Ok(text) if !text.trim().is_empty() => {
-                Some(RenderedWidget::new(text.trim().to_string()))
+                Some(Elem::text(text.trim().to_string()))
             }
             Ok(_) => None,
             Err(e) => {
@@ -283,7 +283,7 @@ impl TemplateEngine {
         widget: &WidgetDef,
         data: &serde_json::Value,
         output_name: Option<&str>,
-    ) -> Option<RenderedWidget> {
+    ) -> Option<Elem> {
         if widget.condition.is_some() {
             let cond_name = format!("{path}.widget.__cond");
             let mut ctx = Context::from_value(data.clone()).unwrap_or_default();
@@ -299,7 +299,7 @@ impl TemplateEngine {
         let mut ctx = Context::from_value(data.clone()).unwrap_or_default();
         ctx.insert("__output", &output_name.unwrap_or(""));
         match self.tera.render(&name, &ctx) {
-            Ok(text) => Some(RenderedWidget::new(text)),
+            Ok(text) => Some(Elem::text(text)),
             Err(e) => {
                 log::error!("template render error {name}: {e}");
                 None

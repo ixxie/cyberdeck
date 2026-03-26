@@ -6,8 +6,8 @@ use smithay_client_toolkit::seat::keyboard::{KeyEvent, Keysym};
 use crate::bar::BarApp;
 use crate::color::Rgba;
 use crate::config::KeyHintDef;
-use crate::layout::RenderedWidget;
-use crate::mods::InteractiveModule;
+use crate::layout::Elem;
+use crate::mods::{InteractiveModule, KeyResult};
 
 pub fn poll(_params: &serde_json::Map<String, Value>) -> Value {
     let powered = get_powered();
@@ -93,19 +93,19 @@ impl BluetoothDeep {
 }
 
 impl InteractiveModule for BluetoothDeep {
-    fn render_center(&self, fg: Rgba, data: &Value) -> Vec<RenderedWidget> {
+    fn render_center(&self, fg: Rgba, data: &Value) -> Vec<Elem> {
         let highlight_fg = Rgba::new(fg.r, fg.g, fg.b, (fg.a as f32 * 0.72) as u8); // active
         let idle_fg = Rgba::new(fg.r, fg.g, fg.b, (fg.a as f32 * 0.44) as u8);     // idle
 
         let powered = data.get("powered").and_then(|v| v.as_bool()).unwrap_or(false);
         if !powered {
-            return vec![RenderedWidget::new("off".into()).with_fg(idle_fg)];
+            return vec![Elem::text("off").fg(idle_fg)];
         }
 
         let devices = data.get("devices").and_then(|v| v.as_array());
         let devices = match devices {
             Some(d) if !d.is_empty() => d,
-            _ => return vec![RenderedWidget::new("no devices".into()).with_fg(idle_fg)],
+            _ => return vec![Elem::text("no devices").fg(idle_fg)],
         };
 
         let mut widgets = Vec::new();
@@ -120,7 +120,7 @@ impl InteractiveModule for BluetoothDeep {
                 idle_fg
             };
             let prefix = if connected { "●" } else { "○" };
-            widgets.push(RenderedWidget::new(format!("{prefix} {name}")).with_fg(dev_fg));
+            widgets.push(Elem::text(format!("{prefix} {name}")).fg(dev_fg));
         }
 
         widgets
@@ -139,7 +139,7 @@ impl InteractiveModule for BluetoothDeep {
         ]
     }
 
-    fn handle_key(&mut self, event: &KeyEvent, data: &Value) -> bool {
+    fn handle_key(&mut self, event: &KeyEvent, data: &Value) -> KeyResult {
         let count = Self::device_count(data);
 
         match event.keysym {
@@ -147,13 +147,13 @@ impl InteractiveModule for BluetoothDeep {
                 if count > 0 {
                     self.cursor = self.cursor.checked_sub(1).unwrap_or(count - 1);
                 }
-                true
+                KeyResult::Handled
             }
             Keysym::Right => {
                 if count > 0 {
                     self.cursor = (self.cursor + 1) % count;
                 }
-                true
+                KeyResult::Handled
             }
             Keysym::Return => {
                 // Toggle connect/disconnect for selected device
@@ -167,13 +167,13 @@ impl InteractiveModule for BluetoothDeep {
                         }
                     }
                 }
-                true
+                KeyResult::Action
             }
             _ if event.utf8.as_deref() == Some("s") => {
                 BarApp::spawn_command("bluetoothctl --timeout 10 scan on");
-                true
+                KeyResult::Action
             }
-            _ => false,
+            _ => KeyResult::Ignored,
         }
     }
 

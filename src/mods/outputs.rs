@@ -5,8 +5,8 @@ use smithay_client_toolkit::seat::keyboard::{KeyEvent, Keysym};
 use crate::bar::BarApp;
 use crate::color::Rgba;
 use crate::config::KeyHintDef;
-use crate::layout::RenderedWidget;
-use crate::mods::InteractiveModule;
+use crate::layout::Elem;
+use crate::mods::{InteractiveModule, KeyResult};
 use crate::pipewire;
 
 pub fn poll(_params: &serde_json::Map<String, Value>) -> Value {
@@ -82,7 +82,7 @@ impl OutputsDeep {
 }
 
 impl InteractiveModule for OutputsDeep {
-    fn render_center(&self, fg: Rgba, data: &Value) -> Vec<RenderedWidget> {
+    fn render_center(&self, fg: Rgba, data: &Value) -> Vec<Elem> {
         let active_fg = Rgba::new(fg.r, fg.g, fg.b, (fg.a as f32 * 0.72) as u8);
         let idle_fg = Rgba::new(fg.r, fg.g, fg.b, (fg.a as f32 * 0.44) as u8);
 
@@ -93,11 +93,11 @@ impl InteractiveModule for OutputsDeep {
 
         let outputs = self.outputs(data);
         if outputs.map(|o| o.is_empty()).unwrap_or(true) {
-            return vec![RenderedWidget::new("no outputs".into()).with_fg(idle_fg)];
+            return vec![Elem::text("no outputs").fg(idle_fg)];
         }
 
         vec![
-            RenderedWidget::new(format!("● {sink} {vol_str}")).with_fg(active_fg),
+            Elem::text(format!("● {sink} {vol_str}")).fg(active_fg),
         ]
     }
 
@@ -114,31 +114,31 @@ impl InteractiveModule for OutputsDeep {
         ]
     }
 
-    fn handle_key(&mut self, event: &KeyEvent, data: &Value) -> bool {
+    fn handle_key(&mut self, event: &KeyEvent, data: &Value) -> KeyResult {
         match event.keysym {
             Keysym::Up => {
                 if let Some(id) = self.default_id(data) {
                     BarApp::spawn_command(&format!("wpctl set-volume {id} 5%+"));
                 }
-                true
+                KeyResult::Action
             }
             Keysym::Down => {
                 if let Some(id) = self.default_id(data) {
                     BarApp::spawn_command(&format!("wpctl set-volume {id} 5%-"));
                 }
-                true
+                KeyResult::Action
             }
             Keysym::Tab => {
                 self.cycle_device(data, true);
-                true
+                KeyResult::Action
             }
             _ if event.utf8.as_deref() == Some("m") => {
                 if let Some(id) = self.default_id(data) {
                     BarApp::spawn_command(&format!("wpctl set-mute {id} toggle"));
                 }
-                true
+                KeyResult::Action
             }
-            _ => false,
+            _ => KeyResult::Ignored,
         }
     }
 

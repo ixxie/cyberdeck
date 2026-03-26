@@ -7,8 +7,8 @@ use smithay_client_toolkit::seat::keyboard::{KeyEvent, Keysym};
 use crate::bar::BarApp;
 use crate::color::Rgba;
 use crate::config::KeyHintDef;
-use crate::layout::RenderedWidget;
-use crate::mods::InteractiveModule;
+use crate::layout::Elem;
+use crate::mods::{InteractiveModule, KeyResult};
 use crate::pipewire;
 
 pub fn poll(_params: &serde_json::Map<String, Value>) -> Value {
@@ -212,20 +212,20 @@ impl InputsDeep {
 }
 
 impl InteractiveModule for InputsDeep {
-    fn render_center(&self, fg: Rgba, data: &Value) -> Vec<RenderedWidget> {
+    fn render_center(&self, fg: Rgba, data: &Value) -> Vec<Elem> {
         let active_fg = Rgba::new(fg.r, fg.g, fg.b, (fg.a as f32 * 0.72) as u8);
         let idle_fg = Rgba::new(fg.r, fg.g, fg.b, (fg.a as f32 * 0.44) as u8);
 
         let devices = match self.devices(data) {
             Some(d) if !d.is_empty() => d,
-            _ => return vec![RenderedWidget::new("no inputs".into()).with_fg(idle_fg)],
+            _ => return vec![Elem::text("no inputs").fg(idle_fg)],
         };
 
         let mut widgets = Vec::new();
 
         let denoise = data.get("denoise").and_then(|v| v.as_bool()).unwrap_or(false);
         if denoise {
-            widgets.push(RenderedWidget::new("◆ denoise".into()).with_fg(active_fg));
+            widgets.push(Elem::text("◆ denoise").fg(active_fg));
         }
 
         for (i, dev) in devices.iter().enumerate() {
@@ -245,7 +245,7 @@ impl InteractiveModule for InputsDeep {
             let prefix = if is_default { "●" } else { "○" };
             let vol_str = if muted { "muted".to_string() } else { format!("{vol}%") };
             widgets.push(
-                RenderedWidget::new(format!("{prefix} {name} {vol_str}")).with_fg(dev_fg),
+                Elem::text(format!("{prefix} {name} {vol_str}")).fg(dev_fg),
             );
         }
 
@@ -270,7 +270,7 @@ impl InteractiveModule for InputsDeep {
         hints
     }
 
-    fn handle_key(&mut self, event: &KeyEvent, data: &Value) -> bool {
+    fn handle_key(&mut self, event: &KeyEvent, data: &Value) -> KeyResult {
         let count = self.device_count(data);
 
         match event.keysym {
@@ -278,45 +278,45 @@ impl InteractiveModule for InputsDeep {
                 if count > 0 {
                     self.cursor = self.cursor.checked_sub(1).unwrap_or(count - 1);
                 }
-                true
+                KeyResult::Handled
             }
             Keysym::Right => {
                 if count > 0 {
                     self.cursor = (self.cursor + 1) % count;
                 }
-                true
+                KeyResult::Handled
             }
             Keysym::Up => {
                 if let Some(id) = self.selected_id(data) {
                     BarApp::spawn_command(&format!("wpctl set-volume {id} 5%+"));
                 }
-                true
+                KeyResult::Action
             }
             Keysym::Down => {
                 if let Some(id) = self.selected_id(data) {
                     BarApp::spawn_command(&format!("wpctl set-volume {id} 5%-"));
                 }
-                true
+                KeyResult::Action
             }
             Keysym::Return => {
                 if let Some(id) = self.selected_id(data) {
                     BarApp::spawn_command(&format!("wpctl set-default {id}"));
                 }
-                true
+                KeyResult::Action
             }
             _ if event.utf8.as_deref() == Some("m") => {
                 if let Some(id) = self.selected_id(data) {
                     BarApp::spawn_command(&format!("wpctl set-mute {id} toggle"));
                 }
-                true
+                KeyResult::Action
             }
             _ if event.utf8.as_deref() == Some("n") => {
                 let active = data.get("denoise").and_then(|v| v.as_bool()).unwrap_or(false);
                 toggle_denoise(active);
                 pipewire::invalidate();
-                true
+                KeyResult::Action
             }
-            _ => false,
+            _ => KeyResult::Ignored,
         }
     }
 

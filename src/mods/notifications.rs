@@ -4,8 +4,8 @@ use smithay_client_toolkit::seat::keyboard::{KeyEvent, Keysym};
 
 use crate::color::Rgba;
 use crate::config::KeyHintDef;
-use crate::layout::RenderedWidget;
-use crate::mods::InteractiveModule;
+use crate::layout::Elem;
+use crate::mods::{InteractiveModule, KeyResult};
 use crate::notifications;
 
 pub fn poll(_params: &serde_json::Map<String, Value>) -> Value {
@@ -63,13 +63,13 @@ impl NotificationsDeep {
 }
 
 impl InteractiveModule for NotificationsDeep {
-    fn render_center(&self, fg: Rgba, data: &Value) -> Vec<RenderedWidget> {
+    fn render_center(&self, fg: Rgba, data: &Value) -> Vec<Elem> {
         let active_fg = Rgba::new(fg.r, fg.g, fg.b, (fg.a as f32 * 0.72) as u8);
         let idle_fg = Rgba::new(fg.r, fg.g, fg.b, (fg.a as f32 * 0.44) as u8);
 
         let notifs = match self.notifs(data) {
             Some(n) if !n.is_empty() => n,
-            _ => return vec![RenderedWidget::new("no notifications".into()).with_fg(idle_fg)],
+            _ => return vec![Elem::text("no notifications").fg(idle_fg)],
         };
 
         // Grab pixmaps from the store
@@ -97,12 +97,12 @@ impl InteractiveModule for NotificationsDeep {
             } else {
                 summary.to_string()
             };
-            let mut widget = RenderedWidget::new(label).with_fg(nfg);
+            let mut widget = Elem::text(label).fg(nfg);
 
             // Attach icon pixmap if available
             if let Some(sn) = stored.iter().find(|s| s.id == id) {
                 if let Some(ref pm) = sn.icon_pixmap {
-                    widget = widget.with_icon_pixmap(pm.clone());
+                    widget = widget.icon(pm.clone());
                 }
             }
 
@@ -125,7 +125,7 @@ impl InteractiveModule for NotificationsDeep {
         ]
     }
 
-    fn handle_key(&mut self, event: &KeyEvent, data: &Value) -> bool {
+    fn handle_key(&mut self, event: &KeyEvent, data: &Value) -> KeyResult {
         let count = self.count(data);
 
         match event.keysym {
@@ -133,13 +133,13 @@ impl InteractiveModule for NotificationsDeep {
                 if count > 0 {
                     self.cursor = self.cursor.checked_sub(1).unwrap_or(count - 1);
                 }
-                true
+                KeyResult::Handled
             }
             Keysym::Right => {
                 if count > 0 {
                     self.cursor = (self.cursor + 1) % count;
                 }
-                true
+                KeyResult::Handled
             }
             _ if event.utf8.as_deref() == Some("d") => {
                 if let Some(id) = self.selected_id(data) {
@@ -148,14 +148,14 @@ impl InteractiveModule for NotificationsDeep {
                         self.cursor = count.saturating_sub(2);
                     }
                 }
-                true
+                KeyResult::Handled
             }
             _ if event.utf8.as_deref() == Some("c") => {
                 notifications::STORE.lock().unwrap().clear_all();
                 self.cursor = 0;
-                true
+                KeyResult::Handled
             }
-            _ => false,
+            _ => KeyResult::Ignored,
         }
     }
 

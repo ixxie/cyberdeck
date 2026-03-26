@@ -3,8 +3,8 @@ use smithay_client_toolkit::seat::keyboard::{KeyEvent, Keysym};
 use crate::bar::BarApp;
 use crate::color::Rgba;
 use crate::config::KeyHintDef;
-use crate::layout::RenderedWidget;
-use crate::mods::InteractiveModule;
+use crate::layout::Elem;
+use crate::mods::{InteractiveModule, KeyResult};
 
 pub struct WallpaperDeep {
     cursor: usize,
@@ -37,13 +37,13 @@ impl WallpaperDeep {
 }
 
 impl InteractiveModule for WallpaperDeep {
-    fn render_center(&self, fg: Rgba, data: &serde_json::Value) -> Vec<RenderedWidget> {
+    fn render_center(&self, fg: Rgba, data: &serde_json::Value) -> Vec<Elem> {
         let idle_fg = Rgba::new(fg.r, fg.g, fg.b, (fg.a as f32 * 0.44) as u8);
         let active_fg = Rgba::new(fg.r, fg.g, fg.b, (fg.a as f32 * 0.72) as u8);
 
         let groups = Self::group_names(data);
         if groups.is_empty() {
-            return vec![RenderedWidget::new("no groups".into()).with_fg(idle_fg)];
+            return vec![Elem::text("no groups").fg(idle_fg)];
         }
 
         let current_group = data.get("group")
@@ -61,7 +61,7 @@ impl InteractiveModule for WallpaperDeep {
             } else {
                 idle_fg
             };
-            widgets.push(RenderedWidget::new(name.clone()).with_fg(item_fg));
+            widgets.push(Elem::text(name.clone()).fg(item_fg));
         }
 
         widgets
@@ -79,26 +79,26 @@ impl InteractiveModule for WallpaperDeep {
         ]
     }
 
-    fn handle_key(&mut self, event: &KeyEvent, data: &serde_json::Value) -> bool {
+    fn handle_key(&mut self, event: &KeyEvent, data: &serde_json::Value) -> KeyResult {
         let count = Self::group_names(data).len();
-        if count == 0 { return false; }
+        if count == 0 { return KeyResult::Ignored; }
 
         match event.keysym {
             Keysym::Left => {
                 self.cursor = self.cursor.checked_sub(1).unwrap_or(count - 1);
-                true
+                KeyResult::Handled
             }
             Keysym::Right => {
                 self.cursor = (self.cursor + 1) % count;
-                true
+                KeyResult::Handled
             }
             Keysym::Return => {
                 if let Some(exec) = Self::group_exec(data, self.cursor) {
                     BarApp::spawn_command(&exec);
                 }
-                true
+                KeyResult::Action
             }
-            _ => false,
+            _ => KeyResult::Ignored,
         }
     }
 
