@@ -62,10 +62,11 @@ pub(crate) fn layout_root_visual(
         }
         nav.push(RenderedWidget::new(t.text.clone()).with_fg(dim_fg));
     } else {
-        nav.extend(render_badges("launcher"));
+        let launcher_icon = template_engine.render_icon("terminal");
+        nav.push(RenderedWidget::new(launcher_icon).with_fg(pal.active).with_path("launcher"));
         for id in &config.bar.order {
             match id.as_str() {
-                "launcher" | "calendar" | "window" | "workspaces" => continue,
+                "calendar" | "window" | "workspaces" => continue,
                 _ => nav.extend(render_badges(id)),
             }
         }
@@ -230,8 +231,7 @@ pub(crate) fn layout_text(
         let mut sorted: Vec<(&String, &ModuleDef)> = config.bar.modules.iter().collect();
         sorted.sort_by(|a, b| a.1.name.cmp(&b.1.name));
 
-        for (id, child) in &sorted {
-            if *id == "launcher" { continue; }
+        for (_id, child) in &sorted {
             if child.widget.is_none() && child.module_type.is_none() { continue; }
             let display = child.name.to_lowercase();
             if q.is_empty() {
@@ -246,7 +246,7 @@ pub(crate) fn layout_text(
         // Merge launcher apps (only when searching)
         let states_ref = states.borrow();
         if !q.is_empty() {
-            if let Some(launcher_state) = states_ref.get("launcher").or_else(|| states_ref.get("__launcher")) {
+            if let Some(launcher_state) = states_ref.get("__launcher") {
                 if let Some(entries) = launcher_state.data.get("entries").and_then(|v| v.as_array()) {
                     for entry in entries {
                         let name = entry.get("name").and_then(|v| v.as_str()).unwrap_or("");
@@ -283,14 +283,8 @@ pub(crate) fn layout_text(
 
     let total = items.len();
 
-    // Launcher badge prefix
-    let prefix = config.bar.modules.get("launcher")
-        .and_then(|m| {
-            let data = serde_json::Value::Null;
-            m.badges.iter().find_map(|(badge_name, badge)| {
-                template_engine.render_badge("launcher", badge_name, badge, &data, bar.output_name.as_deref(), false)
-            })
-        });
+    let launcher_icon = template_engine.render_icon("terminal");
+    let prefix = Some(RenderedWidget::new(launcher_icon).with_fg(pal.selected));
 
     Layout::flex_text_mode(
         prefix.as_ref(), &nav.query, &items, total, nav.selected,
@@ -312,9 +306,7 @@ pub(crate) fn text_matched_items(
 
     if at_root {
         // At root: show all modules
-        let mut sorted: Vec<(&String, &ModuleDef)> = config.bar.modules.iter()
-            .filter(|(id, _)| id.as_str() != "launcher")
-            .collect();
+        let mut sorted: Vec<(&String, &ModuleDef)> = config.bar.modules.iter().collect();
         sorted.sort_by(|a, b| a.1.name.cmp(&b.1.name));
 
         for (id, m) in sorted {
@@ -327,7 +319,7 @@ pub(crate) fn text_matched_items(
         // Merge launcher apps (only when searching)
         if !q.is_empty() {
             let states_ref = states.borrow();
-            if let Some(launcher_state) = states_ref.get("launcher").or_else(|| states_ref.get("__launcher")) {
+            if let Some(launcher_state) = states_ref.get("__launcher") {
                 if let Some(entries) = launcher_state.data.get("entries").and_then(|v| v.as_array()) {
                     for entry in entries {
                         let name = entry.get("name").and_then(|v| v.as_str()).unwrap_or("");

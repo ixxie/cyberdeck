@@ -10,7 +10,7 @@ use crate::bar::{BarApp, DisplayMode, NavState};
 
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "cmd")]
-enum IpcRequest {
+pub enum IpcRequest {
     #[serde(rename = "launcher")]
     Launcher,
     #[serde(rename = "dismiss")]
@@ -261,60 +261,14 @@ fn build_key_event(key: &str) -> KeyEvent {
 
 // Client mode
 
-pub fn send_command(cmd: &str, args: &[String]) {
-    let req = match cmd {
-        "launcher" => IpcRequest::Launcher,
-        "dismiss" => IpcRequest::Dismiss,
-        "push" => {
-            let child = args.first().unwrap_or_else(|| {
-                eprintln!("usage: cyberdeck push <module>");
-                std::process::exit(1);
-            });
-            IpcRequest::Push { child: child.clone() }
-        }
-        "pop" => IpcRequest::Pop,
-        "navigate" => {
-            if args.is_empty() {
-                eprintln!("usage: cyberdeck navigate <module>");
-                std::process::exit(1);
-            }
-            IpcRequest::Navigate { path: args.to_vec() }
-        }
-        "state" => IpcRequest::State,
-        "run" => {
-            if args.len() < 2 {
-                eprintln!("usage: cyberdeck run <module> <key>");
-                std::process::exit(1);
-            }
-            IpcRequest::Run { module: args[0].clone(), hint_key: args[1].clone() }
-        }
-        "type" => {
-            let text = args.first().unwrap_or_else(|| {
-                eprintln!("usage: cyberdeck type <text>");
-                std::process::exit(1);
-            });
-            IpcRequest::Type { text: text.clone() }
-        }
-        "key" => {
-            let key = args.first().unwrap_or_else(|| {
-                eprintln!("usage: cyberdeck key <keyname>");
-                std::process::exit(1);
-            });
-            IpcRequest::Key { key: key.clone() }
-        }
-        _ => {
-            eprintln!("unknown command: {cmd}");
-            std::process::exit(1);
-        }
-    };
-
+pub fn send_request(req: &IpcRequest) {
     let path = sock_path();
     let mut stream = UnixStream::connect(&path).unwrap_or_else(|e| {
         eprintln!("failed to connect to cyberdeck: {e}");
         std::process::exit(1);
     });
 
-    let mut json = serde_json::to_string(&req).unwrap();
+    let mut json = serde_json::to_string(req).unwrap();
     json.push('\n');
     stream.write_all(json.as_bytes()).unwrap_or_else(|e| {
         eprintln!("failed to send command: {e}");
@@ -332,9 +286,7 @@ pub fn send_command(cmd: &str, args: &[String]) {
     print!("{response}");
 
     let resp: serde_json::Value = serde_json::from_str(response.trim()).unwrap_or_default();
-    if resp.get("ok").and_then(|v| v.as_bool()) == Some(true) {
-        std::process::exit(0);
-    } else {
+    if resp.get("ok").and_then(|v| v.as_bool()) != Some(true) {
         std::process::exit(1);
     }
 }

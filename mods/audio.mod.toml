@@ -1,0 +1,68 @@
+name = "Audio"
+icon = "speaker-high"
+type = "audio"
+
+[source]
+type = "native"
+kind = "audio"
+interval = 1
+
+[badges.default]
+template = '{% if muted %}{{ "speaker-slash" | icon }}{% else %}{{ "speaker-high" | icon }}{% endif %}'
+condition = "{{ muted }}"
+
+[badges.input]
+template = '{{ "microphone-slash" | icon }}'
+condition = "{{ input_muted }}"
+
+[widget]
+template = '{% if muted %}muted{% else %}{{ volume | meter(max=100, width=20) }}{% endif %}'
+
+[commands]
+mute = "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle"
+"mute input" = "wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle"
+"vol up" = "wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%+"
+"vol down" = "wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-"
+"input vol up" = "wpctl set-volume @DEFAULT_AUDIO_SOURCE@ 5%+"
+"input vol down" = "wpctl set-volume @DEFAULT_AUDIO_SOURCE@ 5%-"
+denoise = "cyberdeck audio denoise"
+
+[[hooks]]
+condition = '{{ changed(key="volume") or changed(key="muted") }}'
+action = "spotlight"
+timeout = 3
+
+[[hooks]]
+condition = '{{ changed(key="input_muted") }}'
+action = "spotlight"
+timeout = 3
+
+[[key-hints]]
+key = "←→"
+action = ""
+label = "select"
+
+[[key-hints]]
+key = "⏎"
+action = ""
+label = "default"
+
+[[key-hints]]
+key = "↑↓"
+action = ""
+label = "vol"
+
+[[key-hints]]
+key = "m"
+action = ""
+label = "mute"
+
+[[key-hints]]
+key = "Tab"
+action = ""
+label = "in/out"
+
+[[key-hints]]
+key = "Esc"
+action = "back"
+label = "back"

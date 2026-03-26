@@ -1,0 +1,33 @@
+name = "Notifications"
+icon = "bell"
+
+[source]
+type = "native"
+kind = "notifications"
+interval = 5
+
+[badges.default]
+template = '{{ "bell" | icon }}'
+condition = "{{ count > 0 }}"
+
+[widget]
+template = '{% if count == 0 %}no notifications{% elif count == 1 %}1 notification{% else %}{{ count }} notifications{% endif %}{% if dnd %} (DnD){% endif %}'
+
+[commands]
+dnd = "swaync-client -d"
+clear = "swaync-client -C"
+
+[[key-hints]]
+key = "d"
+action = "swaync-client -d"
+label = "DnD"
+
+[[key-hints]]
+key = "c"
+action = "swaync-client -C"
+label = "clear"
+
+[[key-hints]]
+key = "Esc"
+action = "back"
+label = "back"

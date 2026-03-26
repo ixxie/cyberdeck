@@ -28,9 +28,11 @@
           freetype
         ];
 
-        jsonFilter = path: _type: builtins.match ".*\\.json$" path != null;
+        extraFilter = path: _type:
+          (builtins.match ".*\\.json$" path != null) ||
+          (builtins.match ".*\\.mod\\.toml$" path != null);
         srcFilter = path: type:
-          (jsonFilter path type) || (craneLib.filterCargoSources path type);
+          (extraFilter path type) || (craneLib.filterCargoSources path type);
         src = pkgs.lib.cleanSourceWith {
           src = ./.;
           filter = srcFilter;

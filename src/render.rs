@@ -144,24 +144,14 @@ impl Renderer {
                     cx = text_run_start + run_w;
                     text_run.clear();
 
-                    // Render icon (with optional per-item scale)
                     if let Some(icon_pm) = icons.icon_for_char(ch) {
-                        let iscale = item.icon_scale.unwrap_or(1.0);
-                        let icon_w = icon_pm.width() as f32 * iscale;
-                        let icon_h = icon_pm.height() as f32 * iscale;
+                        let icon_w = icon_pm.width() as f32;
+                        let icon_h = icon_pm.height() as f32;
                         let dy = item_y + (cell_h - icon_h) / 2.0;
-                        if iscale == 1.0 {
-                            Self::composite_icon_at(
-                                pixmap.data_mut(), w, h,
-                                icon_pm, cx as i32, dy as i32, fg,
-                            );
-                        } else {
-                            Self::composite_icon_scaled(
-                                pixmap.data_mut(), w, h,
-                                icon_pm, cx as i32, dy as i32,
-                                icon_w as u32, icon_h as u32, fg,
-                            );
-                        }
+                        Self::composite_icon_at(
+                            pixmap.data_mut(), w, h,
+                            icon_pm, cx as i32, dy as i32, fg,
+                        );
                         cx += icon_w;
                     } else {
                         cx += cell_w;
@@ -259,43 +249,6 @@ impl Renderer {
                     continue;
                 }
                 let src_idx = (iy * icon_w + ix) as usize * 4;
-                let alpha = icon_data[src_idx + 3] as f32 / 255.0 * fg_alpha;
-                if alpha > 0.0 {
-                    Self::blend_pixel(
-                        data, buf_w, buf_h,
-                        px, py,
-                        fg.r as f32, fg.g as f32, fg.b as f32,
-                        alpha,
-                    );
-                }
-            }
-        }
-    }
-
-    fn composite_icon_scaled(
-        data: &mut [u8],
-        buf_w: u32, buf_h: u32,
-        icon: &Pixmap,
-        x: i32, y: i32,
-        dst_w: u32, dst_h: u32,
-        fg: crate::color::Rgba,
-    ) {
-        let src_w = icon.width() as f32;
-        let src_h = icon.height() as f32;
-        let icon_data = icon.data();
-        let fg_alpha = fg.a as f32 / 255.0;
-
-        for dy in 0..dst_h as i32 {
-            for dx in 0..dst_w as i32 {
-                let px = x + dx;
-                let py = y + dy;
-                if px < 0 || py < 0 || (px as u32) >= buf_w || (py as u32) >= buf_h {
-                    continue;
-                }
-                let sx = (dx as f32 * src_w / dst_w as f32) as u32;
-                let sy = (dy as f32 * src_h / dst_h as f32) as u32;
-                let src_idx = (sy * icon.width() + sx) as usize * 4;
-                if src_idx + 3 >= icon_data.len() { continue; }
                 let alpha = icon_data[src_idx + 3] as f32 / 255.0 * fg_alpha;
                 if alpha > 0.0 {
                     Self::blend_pixel(

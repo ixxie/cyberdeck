@@ -1,0 +1,40 @@
+name = "Profiles"
+icon = "scales"
+type = "actions"
+
+[source]
+type = "poll"
+command = ["sh", "-c", """printf '{"profile":"%s"}' "$(powerprofilesctl get)" """]
+interval = 5
+
+[badges.default]
+template = '{% if profile == "power-saver" %}{{ "leaf" | icon }}{% elif profile == "performance" %}{{ "lightning" | icon }}{% else %}{{ "scales" | icon }}{% endif %}'
+condition = '{{ profile != "balanced" }}'
+
+[commands]
+power-saver = "powerprofilesctl set power-saver"
+balanced = "powerprofilesctl set balanced"
+performance = "powerprofilesctl set performance"
+
+[[key-hints]]
+key = "s"
+action = "powerprofilesctl set power-saver"
+label = "saver"
+icon = "leaf"
+
+[[key-hints]]
+key = "b"
+action = "powerprofilesctl set balanced"
+label = "balanced"
+icon = "scales"
+
+[[key-hints]]
+key = "p"
+action = "powerprofilesctl set performance"
+label = "performance"
+icon = "lightning"
+
+[[key-hints]]
+key = "Esc"
+action = "back"
+label = "back"

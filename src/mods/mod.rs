@@ -1,5 +1,5 @@
 mod actions;
-mod audio;
+pub mod audio;
 mod bluetooth;
 mod brightness;
 mod launcher;
@@ -122,8 +122,10 @@ pub fn create_interactive(
     icon_resolver: &dyn Fn(&str) -> String,
 ) -> Option<Box<dyn InteractiveModule>> {
     match module_type {
+        "audio" => Some(Box::new(audio::AudioDeep::new())),
         "calendar" => Some(Box::new(calendar::CalendarDeep::new())),
         "bluetooth" => Some(Box::new(bluetooth::BluetoothDeep::new())),
+        "network" => Some(Box::new(network::NetworkDeep::new())),
         "wallpaper" => Some(Box::new(wallpaper_deep::WallpaperDeep::new())),
         "actions" => Some(Box::new(actions::ActionPalette::new(
             &module.name,

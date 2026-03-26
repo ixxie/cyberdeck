@@ -86,12 +86,10 @@ impl SourceManager {
             }
         }
 
-        // Launcher is always registered (built-in)
-        if !bar.modules.contains_key("launcher") {
-            let empty = std::collections::HashMap::new();
-            let source = SourceDef::Native { kind: "launcher".to_string(), interval: 60 };
-            self.register_source("__launcher", &source, &empty, handle, dirty_flag, states);
-        }
+        // Launcher source is always registered (not a module)
+        let empty = std::collections::HashMap::new();
+        let source = SourceDef::Native { kind: "launcher".to_string(), interval: 60 };
+        self.register_source("__launcher", &source, &empty, handle, dirty_flag, states);
     }
 
     pub fn nudge(&self, mod_id: &str) {

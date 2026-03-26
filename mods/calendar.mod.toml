@@ -1,0 +1,11 @@
+name = "Calendar"
+icon = "calendar"
+type = "calendar"
+
+[source]
+type = "native"
+kind = "calendar"
+interval = 1
+
+[badges.default]
+template = "{{ hour }}:{{ minute }}"

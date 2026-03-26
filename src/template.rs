@@ -254,11 +254,7 @@ impl TemplateEngine {
         ctx.insert("__output", &output_name.unwrap_or(""));
         match self.tera.render(&name, &ctx) {
             Ok(text) if !text.trim().is_empty() => {
-                let mut rw = RenderedWidget::new(text.trim().to_string());
-                if let Some(s) = badge.icon_scale {
-                    rw = rw.with_icon_scale(s);
-                }
-                Some(rw)
+                Some(RenderedWidget::new(text.trim().to_string()))
             }
             Ok(_) => None,
             Err(e) => {

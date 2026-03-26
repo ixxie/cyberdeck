@@ -67,8 +67,8 @@ impl IconSet {
             return None;
         }
 
-        // Scale cropped content to 75% of target height, natural width
-        let icon_h = (target_size as f32 * 0.75).round();
+        // Scale cropped content to fit target height, natural width
+        let icon_h = (target_size as f32 * 0.55).round();
         let aspect = cw as f32 / ch as f32;
         let out_h = target_size;
         let out_w = (icon_h * aspect).ceil() as u32;

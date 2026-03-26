@@ -149,6 +149,7 @@ pub struct BarApp {
     pub modifiers: Modifiers,
     pub toast: Option<Toast>,
     pub badge_overrides: HashMap<String, RegistrationToken>,
+    pub spotlight_token: Option<RegistrationToken>,
     pub interactive: HashMap<String, Box<dyn InteractiveModule>>,
 }
 
@@ -224,6 +225,7 @@ impl BarApp {
             },
             toast: None,
             badge_overrides: HashMap::new(),
+            spotlight_token: None,
             interactive,
         }
     }
@@ -236,6 +238,11 @@ impl BarApp {
     }
 
     pub fn set_nav(&mut self, nav: NavState) {
+        // Cancel any active spotlight timer
+        if let Some(token) = self.spotlight_token.take() {
+            self.loop_handle.remove(token);
+        }
+
         let needs_kb = !(nav.stack.is_empty() && matches!(nav.mode, DisplayMode::Visual));
         log::info!("nav -> stack={:?} mode={:?} kb={}", nav.stack, nav.mode, needs_kb);
         self.nav = nav;
@@ -318,6 +325,9 @@ impl BarApp {
                 self.set_badge_override(&key, timeout);
             } else {
                 match action.as_str() {
+                    "spotlight" => {
+                        self.set_spotlight(&mod_path, timeout);
+                    }
                     "toast" => {
                         let icon = self.config.bar.modules.get(&mod_path)
                             .and_then(|m| m.icon.clone());
@@ -353,6 +363,37 @@ impl BarApp {
             token,
         });
         self.dirty.set(true);
+    }
+
+    fn set_spotlight(&mut self, mod_id: &str, timeout: u64) {
+        let module = match self.config.bar.modules.get(mod_id) {
+            Some(m) => m,
+            None => return,
+        };
+        let mode = if module.has_view() {
+            DisplayMode::Visual
+        } else {
+            return;
+        };
+
+        // Cancel existing spotlight timer if re-triggered
+        if let Some(old) = self.spotlight_token.take() {
+            self.loop_handle.remove(old);
+        }
+
+        self.set_nav(NavState::module(mod_id, mode));
+
+        let token = self.loop_handle.insert_source(
+            Timer::from_duration(Duration::from_secs(timeout)),
+            move |_, _, app| {
+                log::info!("spotlight expired");
+                app.spotlight_token = None;
+                app.set_nav(NavState::new());
+                TimeoutAction::Drop
+            },
+        ).expect("failed to set spotlight timer");
+
+        self.spotlight_token = Some(token);
     }
 
     fn set_badge_override(&mut self, mod_path: &str, timeout: u64) {

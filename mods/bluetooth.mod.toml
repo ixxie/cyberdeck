@@ -1,0 +1,27 @@
+name = "Bluetooth"
+icon = "bluetooth"
+type = "bluetooth"
+
+[source]
+type = "native"
+kind = "bluetooth"
+interval = 10
+
+[badges.default]
+template = '{{ "bluetooth" | icon }}'
+condition = "{{ devices | selectattr('connected', 'true') | list | length > 0 }}"
+
+[widget]
+template = '''
+{% if not powered %}off{% elif devices | length == 0 %}no devices{% else %}{% for d in devices %}{% if d.connected %}{{ d.name }}{% else %}{{ d.name | dim }}{% endif %}{% if not loop.last %}  {% endif %}{% endfor %}{% endif %}'''
+
+[commands]
+on = "bluetoothctl power on"
+off = "bluetoothctl power off"
+connect = "bluetoothctl connect"
+disconnect = "bluetoothctl disconnect"
+
+[[key-hints]]
+key = "Esc"
+action = "back"
+label = "back"

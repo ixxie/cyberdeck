@@ -1,3 +1,5 @@
+use std::os::unix::process::CommandExt;
+
 use smithay_client_toolkit::seat::keyboard::{KeyEvent, Keysym};
 
 use crate::bar::BarApp;
@@ -250,34 +252,37 @@ impl BarApp {
         }
     }
 
-    pub(crate) fn launch_app(exec: &str, desktop_id: Option<&str>) {
-        // Prefer gio launch for .desktop files — handles activation, new-window, etc.
-        if let Some(id) = desktop_id {
-            match std::process::Command::new("gio")
-                .args(["launch", id])
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()
-            {
-                Ok(_) => {
-                    log::debug!("gio launch: {id}");
-                    return;
-                }
-                Err(e) => log::debug!("gio launch failed for {id}: {e}, falling back to exec"),
-            }
-        }
-        Self::spawn_command(exec);
-    }
-
-    pub(crate) fn spawn_command(cmd: &str) {
-        match std::process::Command::new("sh")
-            .args(["-c", cmd])
+    pub(crate) fn launch_app(exec: &str, _desktop_id: Option<&str>) {
+        // Delegate to compositor via `niri msg action spawn-sh`.
+        // The compositor has the full user session environment (PATH,
+        // LD_LIBRARY_PATH, etc.) and handles cgroup isolation itself.
+        let args: Vec<&str> = exec.split_whitespace().collect();
+        match std::process::Command::new("niri")
+            .args(["msg", "action", "spawn", "--"])
+            .args(&args)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
         {
+            Ok(_) => log::debug!("launched app via niri: {exec}"),
+            Err(e) => {
+                log::warn!("niri spawn failed: {e}, falling back to direct spawn");
+                Self::spawn_command(exec);
+            }
+        }
+    }
+
+    pub(crate) fn spawn_command(cmd: &str) {
+        match unsafe {
+            std::process::Command::new("sh")
+                .args(["-c", cmd])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .pre_exec(|| { libc::setsid(); Ok(()) })
+                .spawn()
+        } {
             Ok(_) => log::debug!("spawned: {cmd}"),
             Err(e) => log::error!("failed to spawn '{cmd}': {e}"),
         }

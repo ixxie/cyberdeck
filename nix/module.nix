@@ -3,75 +3,49 @@
 
 let
   cfg = config.services.cyberdeck;
-  defaultConfig = import ../mods { inherit pkgs lib; };
+  defaults = import ./mods { inherit pkgs lib; };
 
-  # Merge user mods into default config
-  modsOverride = if cfg.mods != {} then { bar.modules = cfg.mods; } else {};
-  mergedConfig = lib.recursiveUpdate
-    (lib.recursiveUpdate defaultConfig modsOverride)
-    (cfg.extraConfig or {});
+  # Merge user overrides into module definitions
+  mergedModules = lib.recursiveUpdate defaults.modules (cfg.mods or {});
 
-  # Recursively strip Nix-only fields from the module tree
-  stripModule = mod:
-    let
-      stripped = removeAttrs mod [ "enable" "deps" "services" ];
-      hasSubs = stripped ? modules && builtins.isAttrs stripped.modules;
-      strippedSubs = if hasSubs then
-        lib.mapAttrs (_name: stripModule) (
-          lib.filterAttrs (_name: child: child.enable or false) stripped.modules
-        )
-      else {};
-    in stripped // (if hasSubs then { modules = strippedSubs; } else {});
-
-  # Filter enabled modules, then strip recursively
-  barModules = lib.filterAttrs
+  # Filter to enabled modules
+  enabledModules = lib.filterAttrs
     (_name: mod: mod.enable or false)
-    mergedConfig.bar.modules;
+    mergedModules;
 
-  strippedBar = (removeAttrs mergedConfig.bar [ "enable" "deps" ]) // {
-    modules = lib.mapAttrs (_name: stripModule) barModules;
-  };
+  # Build bar.order from enabled modules, preserving default order
+  defaultOrder = defaults.bar.order;
+  enabledOrder = builtins.filter
+    (name: enabledModules ? ${name})
+    defaultOrder;
 
-  finalConfig = {
-    settings = mergedConfig.settings // (cfg.settings or {}) // {
-      icons-dir = "${phosphor-icons}/assets";
-    };
-    bar = strippedBar;
-  };
-
-  # Collect deps recursively from enabled modules
-  collectDeps = mod:
-    let
-      ownDeps = mod.deps or [];
-      subDeps = if mod ? modules && builtins.isAttrs mod.modules then
-        lib.concatLists (
-          lib.mapAttrsToList (_name: child:
-            if child.enable or false then collectDeps child else []
-          ) mod.modules
-        )
-      else [];
-    in ownDeps ++ subDeps;
-
+  # Collect deps from enabled modules
   moduleDeps = lib.concatLists (
-    lib.mapAttrsToList (_name: mod:
-      if mod.enable or false then collectDeps mod else []
-    ) mergedConfig.bar.modules
+    lib.mapAttrsToList (_name: mod: mod.deps or []) enabledModules
   );
 
-  # Collect services recursively from enabled modules
-  collectServices = mod:
-    let
-      ownServices = mod.services or {};
-      subServices = if mod ? modules && builtins.isAttrs mod.modules then
-        lib.foldlAttrs (acc: _name: child:
-          if child.enable or false then acc // (collectServices child) else acc
-        ) {} mod.modules
-      else {};
-    in ownServices // subServices;
+  # Collect services from enabled modules
+  moduleServices = lib.foldlAttrs (acc: _name: mod:
+    acc // (mod.services or {})
+  ) {} enabledModules;
 
-  rawModuleServices = lib.foldlAttrs (acc: _name: mod:
-    if mod.enable or false then acc // (collectServices mod) else acc
-  ) {} mergedConfig.bar.modules;
+  # Collect module param overrides for the sparse JSON config
+  moduleOverrides = lib.filterAttrs (_: v: v != {}) (
+    lib.mapAttrs (_name: mod:
+      removeAttrs mod [ "enable" "deps" "services" ]
+    ) enabledModules
+  );
+
+  # Sparse config: settings + order + only module overrides (params, etc.)
+  finalConfig = {
+    settings = defaults.settings // (cfg.settings or {}) // {
+      icons-dir = "${phosphor-icons}/assets";
+    };
+    bar = {
+      order = enabledOrder;
+      modules = moduleOverrides;
+    };
+  };
 
   depsPath = lib.makeBinPath moduleDeps;
 
@@ -86,6 +60,7 @@ let
     mkdir -p $out/bin
     makeWrapper ${cyberdeckUnwrapped}/bin/cyberdeck $out/bin/cyberdeck \
       --prefix PATH : "${depsPath}"
+    ln -s $out/bin/cyberdeck $out/bin/deck
   '';
 in
 {
@@ -110,14 +85,14 @@ in
       description = "Full config override (merged recursively with default config)";
     };
 
-};
+  };
 
   config = lib.mkIf cfg.enable {
     environment.systemPackages = [ cyberdeckPkg ];
 
     systemd.user.services = (lib.mapAttrs (_name: svc:
       svc // { path = (svc.path or []) ++ [ cyberdeckPkg ]; }
-    ) rawModuleServices) // {
+    ) moduleServices) // {
       cyberdeck = {
       description = "Cyberdeck desktop shell";
       wantedBy = [ "graphical-session.target" ];

@@ -1,10 +1,12 @@
 mod bar;
+mod cli;
 mod color;
 mod nav;
 mod config;
 mod layout;
 mod icons;
 mod ipc;
+mod modlib;
 mod mods;
 mod render;
 mod source;
@@ -26,57 +28,11 @@ extern "C" fn handle_signal(_sig: libc::c_int) {
 fn main() {
     env_logger::init();
 
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let cli = cli::parse();
 
-    // Client mode: known IPC command as first arg
-    if matches!(
-        args.first().map(|s| s.as_str()),
-        Some("launcher" | "dismiss" | "push" | "pop" | "navigate" | "state" | "run" | "type" | "key")
-    ) {
-        ipc::send_command(&args[0], &args[1..]);
+    if let Some(cmd) = cli.cmd {
+        cli::run_cmd(cmd);
         return;
-    }
-
-    // Mod command mode: cyberdeck <mod> <command> [args...]
-    if args.len() >= 2 && !args[0].starts_with('-') {
-        let config = config::Config::load(None).unwrap_or_else(|e| {
-            eprintln!("error loading config: {e}");
-            std::process::exit(1);
-        });
-
-        // Native mod commands
-        if args[0] == "wallpaper" {
-            let params: serde_json::Map<String, serde_json::Value> = config.bar.modules
-                .get("wallpaper")
-                .map(|m| m.params.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
-                .unwrap_or_default();
-            match args[1].as_str() {
-                "shuffle" => {
-                    let group = args.get(2).map(|s| s.as_str());
-                    mods::wallpaper::shuffle(&params, group);
-                }
-                "init" => mods::wallpaper::init(&params),
-                _ => eprintln!("unknown wallpaper command: {}", args[1]),
-            }
-            return;
-        }
-
-        // Shell-based mod commands (fallback for non-native mods)
-        if let Some(cmd) = config.find_command(&args[0], &args[1]) {
-            let full_cmd = if args.len() > 2 {
-                format!("{} {}", cmd, args[2..].join(" "))
-            } else {
-                cmd.to_string()
-            };
-            let status = std::process::Command::new("sh")
-                .args(["-c", &full_cmd])
-                .status()
-                .unwrap_or_else(|e| {
-                    eprintln!("failed to run '{}': {e}", full_cmd);
-                    std::process::exit(1);
-                });
-            std::process::exit(status.code().unwrap_or(1));
-        }
     }
 
     // Daemon mode
@@ -85,13 +41,7 @@ fn main() {
         libc::signal(libc::SIGTERM, handle_signal as libc::sighandler_t);
     }
 
-    let config_path = if args.first().map(|s| s.as_str()) == Some("--config") {
-        args.get(1).map(|s| s.as_str())
-    } else {
-        None
-    };
-
-    let config = config::Config::load(config_path)
+    let config = config::Config::load(cli.config.as_deref())
         .unwrap_or_else(|e| {
             eprintln!("error loading config: {e}");
             std::process::exit(1);

@@ -1,0 +1,57 @@
+name = "Session"
+icon = "power"
+type = "actions"
+
+[source]
+type = "native"
+kind = "session"
+interval = 10
+
+[badges.default]
+template = '{% if charging %}{{ "battery-charging" | icon }}{% elif capacity < 10 %}{{ "battery-empty" | icon }}{% elif capacity < 35 %}{{ "battery-low" | icon }}{% elif capacity < 65 %}{{ "battery-half" | icon }}{% else %}{{ "battery-full" | icon }}{% endif %}'
+condition = "{{ capacity < 20 and not charging }}"
+
+[commands]
+suspend = "systemctl suspend"
+shutdown = "shutdown now"
+reboot = "shutdown -r now"
+logout = "niri msg action quit"
+
+[[hooks]]
+condition = "{{ capacity < 20 and not charging }}"
+action = "notify-send -u normal 'Power' 'Battery at {{ capacity }}%'"
+timeout = 5
+
+[[hooks]]
+condition = "{{ capacity < 5 and not charging }}"
+action = "notify-send -u critical 'Power' 'Battery critical'"
+timeout = 5
+
+[[key-hints]]
+key = "z"
+action = "systemctl suspend"
+label = "suspend"
+icon = "moon"
+
+[[key-hints]]
+key = "x"
+action = "shutdown now"
+label = "shutdown"
+icon = "power"
+
+[[key-hints]]
+key = "r"
+action = "shutdown -r now"
+label = "reboot"
+icon = "arrow-clockwise"
+
+[[key-hints]]
+key = "l"
+action = "niri msg action quit"
+label = "logout"
+icon = "sign-out"
+
+[[key-hints]]
+key = "Esc"
+action = "back"
+label = "back"

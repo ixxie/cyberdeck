@@ -1,0 +1,39 @@
+name = "Media"
+icon = "play"
+
+[source]
+type = "native"
+kind = "media"
+interval = 1
+
+[badges.default]
+template = '{% if status == "Playing" %}{{ "play" | icon }}{% else %}{{ "pause" | icon }}{% endif %}'
+condition = '{{ status == "Playing" }}'
+
+[widget]
+template = '{% if title %}{{ title }}{% if artist %} — {{ artist }}{% endif %}{% else %}no media{% endif %}'
+
+[commands]
+play = "playerctl play-pause"
+prev = "playerctl previous"
+next = "playerctl next"
+
+[[key-hints]]
+key = "p"
+action = "playerctl play-pause"
+label = "play/pause"
+
+[[key-hints]]
+key = "["
+action = "playerctl previous"
+label = "prev"
+
+[[key-hints]]
+key = "]"
+action = "playerctl next"
+label = "next"
+
+[[key-hints]]
+key = "Esc"
+action = "back"
+label = "back"

@@ -1,0 +1,28 @@
+name = "Wallpaper"
+icon = "image"
+type = "wallpaper"
+
+[source]
+type = "native"
+kind = "wallpaper"
+interval = 30
+
+[params]
+dir = "~/Pictures/Wallpapers"
+fill = "crop"
+transition = "fade"
+transition-duration = "1"
+
+[commands]
+shuffle = "cyberdeck wallpaper shuffle"
+init = "cyberdeck wallpaper init"
+
+[[key-hints]]
+key = "s"
+action = "cyberdeck wallpaper shuffle"
+label = "shuffle"
+
+[[key-hints]]
+key = "Esc"
+action = "back"
+label = "back"
