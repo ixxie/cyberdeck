@@ -31,7 +31,7 @@ pub(crate) fn layout_root_visual(
     output_mul: f32,
     gap_px: f32,
     badge_overrides: &HashMap<String, RegistrationToken>,
-    toast: &Option<Toast>,
+    toasts: &[Toast],
 ) -> Layout {
     let states_ref = states.borrow();
     let output_name = bar.output_name.as_deref();
@@ -54,22 +54,24 @@ pub(crate) fn layout_root_visual(
 
     // Fixed root layout: [nav] [clock] [window | workspaces]
     let mut nav = Vec::new();
-    if let Some(t) = toast {
-        let dim_fg = pal.active;
-        if let Some(icon_name) = &t.icon {
-            let icon_text = template_engine.render_icon(icon_name);
-            nav.push(RenderedWidget::new(icon_text).with_fg(dim_fg));
+    let launcher_icon = template_engine.render_icon("terminal");
+    nav.push(RenderedWidget::new(launcher_icon).with_fg(pal.active).with_path("launcher"));
+    for id in &config.bar.order {
+        match id.as_str() {
+            "calendar" | "window" | "workspaces" => continue,
+            _ => nav.extend(render_badges(id)),
         }
-        nav.push(RenderedWidget::new(t.text.clone()).with_fg(dim_fg));
-    } else {
-        let launcher_icon = template_engine.render_icon("terminal");
-        nav.push(RenderedWidget::new(launcher_icon).with_fg(pal.active).with_path("launcher"));
-        for id in &config.bar.order {
-            match id.as_str() {
-                "calendar" | "window" | "workspaces" => continue,
-                _ => nav.extend(render_badges(id)),
-            }
+    }
+
+    // Toasts appear after badges
+    let toast_fg = Rgba::new(pal.active.r, pal.active.g, pal.active.b,
+        (pal.active.a as f32 * 0.85) as u8);
+    for t in toasts {
+        let mut widget = RenderedWidget::new(t.text.clone()).with_fg(toast_fg);
+        if let Some(ref pm) = t.icon_pixmap {
+            widget = widget.with_icon_pixmap(pm.clone());
         }
+        nav.push(widget);
     }
 
     // Center: clock (calendar badges)

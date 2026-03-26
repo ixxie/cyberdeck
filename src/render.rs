@@ -122,8 +122,20 @@ impl Renderer {
                 }
             }
 
-            // Walk through the text, splitting into icon and text segments
+            // Render inline icon pixmap (e.g. notification app icon)
             let mut cx = item_x;
+            if let Some(ref icon_pm) = item.icon_pixmap {
+                let icon_w = icon_pm.width() as f32;
+                let icon_h = icon_pm.height() as f32;
+                let dy = item_y + (cell_h - icon_h) / 2.0;
+                Self::composite_icon_at(
+                    pixmap.data_mut(), w, h,
+                    icon_pm, cx as i32, dy as i32, item.fg,
+                );
+                cx += icon_w + cell_w * 0.5; // gap after icon
+            }
+
+            // Walk through the text, splitting into icon and text segments
             let mut dim = false;
             let mut text_run = String::new();
             let mut text_run_start = cx;

@@ -1,5 +1,8 @@
 { pkgs, ... }:
 {
-  enable = false;
-  deps = [ pkgs.sway ];
+  enable = true;
+  deps = [ pkgs.sway pkgs.jq ];
+  params = {
+    default = "English (US)";
+  };
 }

@@ -119,8 +119,13 @@ fn run_module_cmd(args: &[String]) {
     let extra = &rest[1..];
 
     // Native mod commands
-    if mod_name == "audio" && action == "denoise" {
-        crate::mods::audio::cli_toggle_denoise();
+    if mod_name == "inputs" && action == "denoise" {
+        crate::mods::inputs::cli_toggle_denoise();
+        return;
+    }
+    if mod_name == "notifications" && action == "clear" {
+        crate::notifications::STORE.lock().unwrap().clear_all();
+        eprintln!("notifications cleared");
         return;
     }
     if mod_name == "wallpaper" {

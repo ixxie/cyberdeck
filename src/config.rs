@@ -241,7 +241,7 @@ impl Config {
         } else {
             // New format: sparse overrides merged with builtins
             let runtime: RuntimeConfig = serde_json::from_value(raw)?;
-            let modules = Self::merge_modules(builtins, &runtime.bar.order, runtime.bar.modules);
+            let (order, modules) = Self::merge_modules(builtins, &runtime.bar.order, runtime.bar.modules);
             Config {
                 settings: Settings {
                     position: runtime.settings.position,
@@ -257,7 +257,7 @@ impl Config {
                     output_scales: runtime.settings.output_scales,
                 },
                 bar: BarDef {
-                    order: runtime.bar.order,
+                    order,
                     modules,
                 },
             }
@@ -271,8 +271,21 @@ impl Config {
         builtins: HashMap<String, ModuleDef>,
         order: &[String],
         overrides: HashMap<String, serde_json::Value>,
-    ) -> HashMap<String, ModuleDef> {
+    ) -> (Vec<String>, HashMap<String, ModuleDef>) {
         let mut result = HashMap::new();
+
+        // If no order specified, use all builtins alphabetically
+        let default_order: Vec<String>;
+        let order = if order.is_empty() {
+            default_order = {
+                let mut keys: Vec<String> = builtins.keys().cloned().collect();
+                keys.sort();
+                keys
+            };
+            &default_order
+        } else {
+            order
+        };
 
         for id in order {
             let base = builtins.get(id);
@@ -317,7 +330,7 @@ impl Config {
             result.insert(id.clone(), def);
         }
 
-        result
+        (order.to_vec(), result)
     }
 
     fn params_dir() -> PathBuf {

@@ -16,26 +16,19 @@ in
     };
   };
 
-  bar.order = [
-    "notifications" "media" "system" "storage"
-    "audio" "brightness" "bluetooth" "weather"
-    "network" "profiles" "session" "wallpaper" "window"
-    "keyboard" "clipboard" "mounts"
-    "calendar" "workspaces"
-  ];
-
   modules = {
-    audio = importMod "audio";
     bluetooth = importMod "bluetooth";
     brightness = importMod "brightness";
     calendar = importMod "calendar";
     clipboard = importMod "clipboard";
     keyboard = importMod "keyboard";
 
-    media = importMod "media";
+    inputs = importMod "inputs";
     mounts = importMod "mounts";
     network = importMod "network";
     notifications = importMod "notifications";
+    media = importMod "media";
+    outputs = importMod "outputs";
     profiles = importMod "profiles";
     session = importMod "session";
     storage = importMod "storage";

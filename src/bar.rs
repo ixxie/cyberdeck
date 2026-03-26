@@ -105,6 +105,7 @@ impl BarInstance {
             .expect("failed to create slot pool");
 
         let initial_scale = 2i32;
+        crate::appicon::set_target_height((renderer.cell_h * initial_scale as f32).ceil() as u32);
         let icons = IconSet::load(
             config.settings.icons_dir.as_deref(),
             &config.settings.icon_weight,
@@ -147,17 +148,22 @@ pub struct BarApp {
     pub pointer: Option<WlPointer>,
     pub nav: NavState,
     pub modifiers: Modifiers,
-    pub toast: Option<Toast>,
+    pub toasts: Vec<Toast>,
     pub badge_overrides: HashMap<String, RegistrationToken>,
     pub spotlight_token: Option<RegistrationToken>,
     pub interactive: HashMap<String, Box<dyn InteractiveModule>>,
 }
 
 pub struct Toast {
+    pub toast_id: u64,
     pub text: String,
     pub icon: Option<String>,
+    pub icon_pixmap: Option<std::sync::Arc<tiny_skia::Pixmap>>,
     pub token: RegistrationToken,
 }
+
+const MAX_VISIBLE_TOASTS: usize = 3;
+static NEXT_TOAST_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 impl BarApp {
     pub fn new(
@@ -184,6 +190,32 @@ impl BarApp {
 
         let mut source_mgr = SourceManager::new();
         source_mgr.register_modules(&config.bar, loop_handle, dirty.clone(), states.clone());
+
+        // Spawn notification daemon and register calloop channel
+        let notif_channel = crate::notifications::spawn_daemon();
+        let notif_dirty = dirty.clone();
+        loop_handle.insert_source(notif_channel, move |event, _, app| {
+            use smithay_client_toolkit::reexports::calloop::channel::Event;
+            if let Event::Msg(evt) = event {
+                match evt {
+                    crate::notifications::NotifyEvent::New(n) => {
+                        let timeout_secs = if n.timeout_ms <= 0 { 5 } else {
+                            (n.timeout_ms as u64 + 999) / 1000
+                        };
+                        let text = if n.body.is_empty() {
+                            n.summary.clone()
+                        } else {
+                            format!("{} — {}", n.summary, n.body)
+                        };
+                        app.add_toast_with_pixmap(&text, Some(n.app_name.clone()), n.icon_pixmap.clone(), timeout_secs);
+                    }
+                    crate::notifications::NotifyEvent::Close(_id) => {
+                        // Notification dismissed via D-Bus; store already updated
+                    }
+                }
+                notif_dirty.set(true);
+            }
+        }).expect("failed to register notification channel");
 
         // Initialize deep modules before config is moved
         let mut interactive: HashMap<String, Box<dyn InteractiveModule>> = HashMap::new();
@@ -223,7 +255,7 @@ impl BarApp {
                 logo: false,
                 num_lock: false,
             },
-            toast: None,
+            toasts: Vec::new(),
             badge_overrides: HashMap::new(),
             spotlight_token: None,
             interactive,
@@ -273,7 +305,7 @@ impl BarApp {
                         bar, &self.config, &mut self.renderer,
                         &self.template_engine, &self.states, &qh,
                         &self.nav,
-                        &self.toast, &self.badge_overrides,
+                        &self.toasts, &self.badge_overrides,
                         &self.interactive,
                     );
                     drew = true;
@@ -343,26 +375,47 @@ impl BarApp {
     }
 
     pub fn set_toast(&mut self, text: &str, icon: Option<String>, timeout: u64) {
-        if let Some(old) = self.toast.take() {
+        self.add_toast_with_pixmap(text, icon, None, timeout);
+    }
+
+    fn add_toast_with_pixmap(
+        &mut self,
+        text: &str,
+        icon: Option<String>,
+        icon_pixmap: Option<std::sync::Arc<tiny_skia::Pixmap>>,
+        timeout: u64,
+    ) {
+        // Cap visible toasts
+        while self.toasts.len() >= MAX_VISIBLE_TOASTS {
+            let old = self.toasts.remove(0);
             self.loop_handle.remove(old.token);
         }
 
+        let tid = NEXT_TOAST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let token = self.loop_handle.insert_source(
             Timer::from_duration(Duration::from_secs(timeout)),
             move |_, _, app| {
-                log::info!("toast expired");
-                app.toast = None;
+                app.remove_toast(tid);
                 app.dirty.set(true);
                 TimeoutAction::Drop
             },
         ).expect("failed to set toast timer");
 
-        self.toast = Some(Toast {
+        self.toasts.push(Toast {
+            toast_id: tid,
             text: text.to_string(),
             icon,
+            icon_pixmap,
             token,
         });
         self.dirty.set(true);
+    }
+
+    fn remove_toast(&mut self, tid: u64) {
+        if let Some(pos) = self.toasts.iter().position(|t| t.toast_id == tid) {
+            let old = self.toasts.remove(pos);
+            self.loop_handle.remove(old.token);
+        }
     }
 
     fn set_spotlight(&mut self, mod_id: &str, timeout: u64) {
@@ -424,7 +477,7 @@ impl BarApp {
         states: &Rc<std::cell::RefCell<HashMap<String, ModuleState>>>,
         qh: &QueueHandle<BarApp>,
         nav: &NavState,
-        toast: &Option<Toast>,
+        toasts: &[Toast],
         badge_overrides: &HashMap<String, RegistrationToken>,
         interactive: &HashMap<String, Box<dyn InteractiveModule>>,
     ) {
@@ -448,7 +501,7 @@ impl BarApp {
         let gap_px = renderer.cell_w * output_mul * 1.5;
 
         let layout = if nav.stack.is_empty() && matches!(nav.mode, DisplayMode::Visual) {
-            crate::view::layout_root_visual(bar, config, template_engine, states, renderer, pal, bg, bar_content_w, output_mul, gap_px, badge_overrides, toast)
+            crate::view::layout_root_visual(bar, config, template_engine, states, renderer, pal, bg, bar_content_w, output_mul, gap_px, badge_overrides, toasts)
         } else {
             match nav.mode {
                 DisplayMode::Visual => {

@@ -1,0 +1,45 @@
+name = "Outputs"
+icon = "speaker-high"
+type = "outputs"
+
+[source]
+type = "native"
+kind = "outputs"
+interval = 1
+
+[badges.default]
+template = '{% if muted %}{{ "speaker-slash" | icon }}{% else %}{{ "speaker-high" | icon }}{% endif %}'
+condition = "{{ muted }}"
+
+[widget]
+template = '{% if muted %}muted{% else %}{{ volume | meter(max=100, width=20) }}{% endif %}'
+
+[commands]
+up = "wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%+"
+down = "wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-"
+mute = "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle"
+
+[[hooks]]
+condition = '{{ changed(key="volume") or changed(key="muted") }}'
+action = "spotlight"
+timeout = 3
+
+[[key-hints]]
+key = "↑↓"
+action = ""
+label = "vol"
+
+[[key-hints]]
+key = "m"
+action = ""
+label = "mute"
+
+[[key-hints]]
+key = "Tab"
+action = ""
+label = "device"
+
+[[key-hints]]
+key = "Esc"
+action = "back"
+label = "back"

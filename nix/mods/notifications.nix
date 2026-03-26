@@ -1,5 +1,5 @@
 { pkgs, ... }:
 {
-  enable = false;
-  deps = [ pkgs.swaynotificationcenter ];
+  enable = true;
+  deps = [ pkgs.libnotify ];
 }

@@ -1,3 +1,4 @@
+mod appicon;
 mod bar;
 mod cli;
 mod color;
@@ -8,6 +9,8 @@ mod icons;
 mod ipc;
 mod modlib;
 mod mods;
+mod notifications;
+mod pipewire;
 mod render;
 mod source;
 mod template;

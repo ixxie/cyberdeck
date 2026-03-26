@@ -13,12 +13,6 @@ let
     (_name: mod: mod.enable or false)
     mergedModules;
 
-  # Build bar.order from enabled modules, preserving default order
-  defaultOrder = defaults.bar.order;
-  enabledOrder = builtins.filter
-    (name: enabledModules ? ${name})
-    defaultOrder;
-
   # Collect deps from enabled modules
   moduleDeps = lib.concatLists (
     lib.mapAttrsToList (_name: mod: mod.deps or []) enabledModules
@@ -27,6 +21,11 @@ let
   # Collect services from enabled modules
   moduleServices = lib.foldlAttrs (acc: _name: mod:
     acc // (mod.services or {})
+  ) {} enabledModules;
+
+  # Collect environment variables from enabled modules
+  moduleEnv = lib.foldlAttrs (acc: _name: mod:
+    acc // (mod.env or {})
   ) {} enabledModules;
 
   # Collect module param overrides for the sparse JSON config
@@ -42,7 +41,6 @@ let
       icons-dir = "${phosphor-icons}/assets";
     };
     bar = {
-      order = enabledOrder;
       modules = moduleOverrides;
     };
   };
@@ -107,7 +105,7 @@ in
         RestartSec = 2;
       };
 
-      environment = {
+      environment = moduleEnv // {
         WAYLAND_DISPLAY = "wayland-1";
         RUST_LOG = "cyberdeck=debug";
       };

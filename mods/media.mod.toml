@@ -1,5 +1,6 @@
 name = "Media"
 icon = "play"
+type = "media"
 
 [source]
 type = "native"
@@ -20,17 +21,17 @@ next = "playerctl next"
 
 [[key-hints]]
 key = "p"
-action = "playerctl play-pause"
+action = ""
 label = "play/pause"
 
 [[key-hints]]
 key = "["
-action = "playerctl previous"
+action = ""
 label = "prev"
 
 [[key-hints]]
 key = "]"
-action = "playerctl next"
+action = ""
 label = "next"
 
 [[key-hints]]

@@ -1,31 +1,24 @@
 name = "Keyboard"
 icon = "keyboard"
-type = "actions"
+type = "keyboard"
 
 [source]
 type = "poll"
 command = ["sh", "-c", """
-layout=$(swaymsg -t get_inputs | jq -r '[.[] | select(.type == "keyboard") | .xkb_active_layout_name] | first // "unknown"')
-printf '{"layout":"%s"}' "$layout"
+params="${XDG_CACHE_HOME:-$HOME/.cache}/cyberdeck/params/keyboard/params.json"
+default=$(jq -r '.default // ""' "$params" 2>/dev/null)
+input=$(swaymsg -t get_inputs | jq -r '[.[] | select(.type == "keyboard")] | first')
+layout=$(echo "$input" | jq -r '.xkb_active_layout_name // "unknown"')
+idx=$(echo "$input" | jq -r '.xkb_active_layout_index // 0')
+layouts=$(echo "$input" | jq -c '[.xkb_layout_names[] // empty]')
+printf '{"layout":"%s","layout_idx":%s,"layouts":%s,"default":"%s"}' "$layout" "$idx" "$layouts" "$default"
 """]
 interval = 5
 
 [badges.default]
 template = '{{ "keyboard" | icon }}'
-condition = '{{ layout != "English (US)" and layout != "unknown" }}'
+condition = '{{ default != "" and layout != default and layout != "unknown" }}'
 
 [widget]
 template = "{{ layout }}"
 
-[commands]
-next = "swaymsg input type:keyboard xkb_switch_layout next"
-
-[[key-hints]]
-key = "n"
-action = "swaymsg input type:keyboard xkb_switch_layout next"
-label = "next"
-
-[[key-hints]]
-key = "Esc"
-action = "back"
-label = "back"

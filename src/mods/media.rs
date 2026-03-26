@@ -1,12 +1,20 @@
 use serde_json::{json, Value};
 use std::process::Command;
 
+use smithay_client_toolkit::seat::keyboard::{KeyEvent, Keysym};
+
+use crate::bar::BarApp;
+use crate::color::Rgba;
+use crate::config::KeyHintDef;
+use crate::layout::RenderedWidget;
+use crate::mods::InteractiveModule;
+
 pub fn poll(_params: &serde_json::Map<String, Value>) -> Value {
     let out = Command::new("playerctl")
         .args([
             "metadata",
             "--format",
-            r#"{"player":"{{playerName}}","title":"{{title}}","artist":"{{artist}}","album":"{{album}}","status":"{{status}}","position_us":{{position}}}"#,
+            r#"{"player":"{{playerName}}","title":"{{title}}","artist":"{{artist}}","album":"{{album}}","status":"{{status}}"}"#,
         ])
         .output();
 
@@ -32,6 +40,79 @@ fn defaults() -> Value {
         "artist": "",
         "album": "",
         "status": "Stopped",
-        "position_us": 0,
     })
+}
+
+// --- Deep module ---
+
+pub struct MediaDeep;
+
+impl MediaDeep {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl InteractiveModule for MediaDeep {
+    fn render_center(&self, fg: Rgba, data: &Value) -> Vec<RenderedWidget> {
+        let idle_fg = Rgba::new(fg.r, fg.g, fg.b, (fg.a as f32 * 0.44) as u8);
+
+        let title = data.get("title").and_then(|v| v.as_str()).unwrap_or("");
+        let artist = data.get("artist").and_then(|v| v.as_str()).unwrap_or("");
+        let status = data.get("status").and_then(|v| v.as_str()).unwrap_or("Stopped");
+
+        if title.is_empty() {
+            return vec![RenderedWidget::new("no media".into()).with_fg(idle_fg)];
+        }
+
+        let icon = if status == "Playing" { "▶" } else { "⏸" };
+        let label = if !artist.is_empty() {
+            format!("{icon} {artist} — {title}")
+        } else {
+            format!("{icon} {title}")
+        };
+
+        vec![RenderedWidget::new(label).with_fg(fg)]
+    }
+
+    fn breadcrumb(&self) -> Vec<String> {
+        vec![]
+    }
+
+    fn key_hints(&self) -> Vec<KeyHintDef> {
+        vec![
+            KeyHintDef { key: "p".into(), action: String::new(), label: "play/pause".into(), icon: None },
+            KeyHintDef { key: "[".into(), action: String::new(), label: "prev".into(), icon: None },
+            KeyHintDef { key: "]".into(), action: String::new(), label: "next".into(), icon: None },
+            KeyHintDef { key: "Esc".into(), action: "back".into(), label: "back".into(), icon: None },
+        ]
+    }
+
+    fn handle_key(&mut self, event: &KeyEvent, _data: &Value) -> bool {
+        match event.keysym {
+            _ if event.utf8.as_deref() == Some("p") => {
+                BarApp::spawn_command("playerctl play-pause");
+                true
+            }
+            _ if event.utf8.as_deref() == Some("[") => {
+                BarApp::spawn_command("playerctl previous");
+                true
+            }
+            _ if event.utf8.as_deref() == Some("]") => {
+                BarApp::spawn_command("playerctl next");
+                true
+            }
+            Keysym::Left => {
+                BarApp::spawn_command("playerctl previous");
+                true
+            }
+            Keysym::Right => {
+                BarApp::spawn_command("playerctl next");
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn reset(&mut self) {}
 }

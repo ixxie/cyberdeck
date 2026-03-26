@@ -1,9 +1,11 @@
 mod actions;
-pub mod audio;
 mod bluetooth;
+mod keyboard;
+pub mod inputs;
+pub mod media;
+pub mod outputs;
 mod brightness;
 mod launcher;
-mod media;
 mod network;
 mod notifications;
 mod session;
@@ -59,11 +61,12 @@ pub fn register<D: 'static>(
         "storage" => storage::poll,
         "launcher" => launcher::poll,
         "session" => session::poll,
-        "audio" => audio::poll,
+        "outputs" => outputs::poll,
+        "inputs" => inputs::poll,
+        "media" => media::poll,
         "network" => network::poll,
         "bluetooth" => bluetooth::poll,
         "weather" => weather::poll,
-        "media" => media::poll,
         "notifications" => notifications::poll,
         "window" => window::poll,
         "workspaces" => workspaces::poll,
@@ -122,9 +125,13 @@ pub fn create_interactive(
     icon_resolver: &dyn Fn(&str) -> String,
 ) -> Option<Box<dyn InteractiveModule>> {
     match module_type {
-        "audio" => Some(Box::new(audio::AudioDeep::new())),
+        "outputs" => Some(Box::new(outputs::OutputsDeep::new())),
+        "inputs" => Some(Box::new(inputs::InputsDeep::new())),
+        "media" => Some(Box::new(media::MediaDeep::new())),
+        "notifications" => Some(Box::new(notifications::NotificationsDeep::new())),
         "calendar" => Some(Box::new(calendar::CalendarDeep::new())),
         "bluetooth" => Some(Box::new(bluetooth::BluetoothDeep::new())),
+        "keyboard" => Some(Box::new(keyboard::KeyboardDeep::new())),
         "network" => Some(Box::new(network::NetworkDeep::new())),
         "wallpaper" => Some(Box::new(wallpaper_deep::WallpaperDeep::new())),
         "actions" => Some(Box::new(actions::ActionPalette::new(

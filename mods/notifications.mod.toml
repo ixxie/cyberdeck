@@ -1,30 +1,35 @@
 name = "Notifications"
 icon = "bell"
+type = "notifications"
 
 [source]
 type = "native"
 kind = "notifications"
-interval = 5
+interval = 2
 
 [badges.default]
 template = '{{ "bell" | icon }}'
 condition = "{{ count > 0 }}"
 
 [widget]
-template = '{% if count == 0 %}no notifications{% elif count == 1 %}1 notification{% else %}{{ count }} notifications{% endif %}{% if dnd %} (DnD){% endif %}'
+template = '{% if count == 0 %}no notifications{% elif count == 1 %}1 notification{% else %}{{ count }} notifications{% endif %}'
 
 [commands]
-dnd = "swaync-client -d"
-clear = "swaync-client -C"
+clear = "cyberdeck notifications clear"
+
+[[key-hints]]
+key = "←→"
+action = ""
+label = "scroll"
 
 [[key-hints]]
 key = "d"
-action = "swaync-client -d"
-label = "DnD"
+action = ""
+label = "dismiss"
 
 [[key-hints]]
 key = "c"
-action = "swaync-client -C"
+action = ""
 label = "clear"
 
 [[key-hints]]

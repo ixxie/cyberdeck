@@ -19,6 +19,9 @@ env_logger = "0.11"
 unicode-width = "0.2"
 clap = { version = "4", features = ["derive"] }
 toml = "0.8"
+zbus = "5"
+async-io = "2"
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [build-dependencies]
 toml = "0.8"

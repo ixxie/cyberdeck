@@ -1,0 +1,56 @@
+name = "Inputs"
+icon = "microphone"
+type = "inputs"
+
+[source]
+type = "native"
+kind = "inputs"
+interval = 1
+
+[badges.default]
+template = '{{ "microphone-slash" | icon }}'
+condition = "{{ muted }}"
+
+[widget]
+template = '{% if muted %}muted{% else %}{{ volume | meter(max=100, width=20) }}{% endif %}'
+
+[commands]
+mute = "wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle"
+up = "wpctl set-volume @DEFAULT_AUDIO_SOURCE@ 5%+"
+down = "wpctl set-volume @DEFAULT_AUDIO_SOURCE@ 5%-"
+denoise = "cyberdeck inputs denoise"
+
+[[hooks]]
+condition = '{{ changed(key="muted") }}'
+action = "spotlight"
+timeout = 3
+
+[[key-hints]]
+key = "←→"
+action = ""
+label = "select"
+
+[[key-hints]]
+key = "⏎"
+action = ""
+label = "default"
+
+[[key-hints]]
+key = "↑↓"
+action = ""
+label = "vol"
+
+[[key-hints]]
+key = "m"
+action = ""
+label = "mute"
+
+[[key-hints]]
+key = "n"
+action = ""
+label = "denoise"
+
+[[key-hints]]
+key = "Esc"
+action = "back"
+label = "back"

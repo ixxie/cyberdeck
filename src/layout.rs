@@ -1,3 +1,6 @@
+use std::sync::Arc;
+
+use tiny_skia::Pixmap;
 use unicode_width::UnicodeWidthChar;
 
 use crate::color::Rgba;
@@ -9,11 +12,17 @@ pub struct RenderedWidget {
     pub bg: Option<Rgba>,
     pub path: Option<String>,
     pub is_breadcrumb: bool,
+    pub icon_pixmap: Option<Arc<Pixmap>>,
 }
 
 impl RenderedWidget {
     pub fn new(text: String) -> Self {
-        Self { text, fg: None, bg: None, path: None, is_breadcrumb: false }
+        Self { text, fg: None, bg: None, path: None, is_breadcrumb: false, icon_pixmap: None }
+    }
+
+    pub fn with_icon_pixmap(mut self, pm: Arc<Pixmap>) -> Self {
+        self.icon_pixmap = Some(pm);
+        self
     }
 
     pub fn with_path(mut self, path: &str) -> Self {
@@ -45,6 +54,7 @@ pub struct LayoutItem {
     pub text: String,
     pub fg: Rgba,
     pub bg: Option<Rgba>,
+    pub icon_pixmap: Option<Arc<Pixmap>>,
 }
 
 #[derive(Debug)]
@@ -54,6 +64,11 @@ pub struct Layout {
 }
 
 impl Layout {
+    pub fn measure_with_icon(text: &str, icons: &crate::icons::IconSet, cell_w: f32, scale: f32, icon_pixmap: Option<&Pixmap>) -> f32 {
+        let icon_w = icon_pixmap.map(|pm| pm.width() as f32 / scale + cell_w * 0.5).unwrap_or(0.0);
+        icon_w + Self::measure(text, icons, cell_w, scale)
+    }
+
     pub fn measure(text: &str, icons: &crate::icons::IconSet, cell_w: f32, scale: f32) -> f32 {
         let mut w = 0.0;
         for ch in text.chars() {
@@ -91,7 +106,7 @@ impl Layout {
 
         let group_widths: Vec<f32> = groups.iter().map(|group| {
             let content: f32 = group.iter()
-                .map(|rw| Self::measure(&rw.text, icons, cell_w, scale))
+                .map(|rw| Self::measure_with_icon(&rw.text, icons, cell_w, scale, rw.icon_pixmap.as_deref()))
                 .sum();
             let gaps = group.len().saturating_sub(1) as f32 * gap_px;
             content + gaps
@@ -125,12 +140,13 @@ impl Layout {
 
                 let w_fg = rw.fg.unwrap_or(fg);
                 let w_bg = rw.bg;
-                let item_w = Self::measure(&rw.text, icons, cell_w, scale);
+                let item_w = Self::measure_with_icon(&rw.text, icons, cell_w, scale, rw.icon_pixmap.as_deref());
 
                 items.push(LayoutItem {
                     x, width: item_w,
                     text: rw.text.clone(),
                     fg: w_fg, bg: w_bg,
+                    icon_pixmap: rw.icon_pixmap.clone(),
                 });
 
                 if rw.is_breadcrumb {
@@ -180,7 +196,7 @@ impl Layout {
             let prefix_w = Self::measure(&pw.text, icons, cell_w, scale);
             items.push(LayoutItem {
                 x, width: prefix_w,
-                text: pw.text.clone(), fg, bg: None,
+                text: pw.text.clone(), fg, bg: None, icon_pixmap: None,
             });
             x += prefix_w + gap_px;
         }
@@ -190,7 +206,7 @@ impl Layout {
         let query_w = query_display.len() as f32 * cell_w;
         items.push(LayoutItem {
             x, width: query_w,
-            text: query_display, fg, bg: None,
+            text: query_display, fg, bg: None, icon_pixmap: None,
         });
 
         // Count on right
@@ -201,7 +217,7 @@ impl Layout {
         let right_x = bar_width - right_w;
         items.push(LayoutItem {
             x: right_x, width: right_w,
-            text: right_text, fg: idle_fg, bg: None,
+            text: right_text, fg: idle_fg, bg: None, icon_pixmap: None,
         });
 
         // Items centered
@@ -232,7 +248,7 @@ impl Layout {
             items.push(LayoutItem {
                 x, width: item_w,
                 text: format!(" {} ", text),
-                fg: item_fg, bg: None,
+                fg: item_fg, bg: None, icon_pixmap: None,
             });
 
             x += item_w;
