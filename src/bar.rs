@@ -95,15 +95,13 @@ impl BarInstance {
             Position::Bottom => Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
         };
         layer_surface.set_anchor(anchor);
-        layer_surface.set_margin(
-            config.settings.margin as i32,
-            config.settings.margin as i32,
-            config.settings.margin as i32,
-            config.settings.margin as i32,
-        );
+        let mx = config.settings.margin_x() as i32;
+        let my = config.settings.margin_y() as i32;
+        layer_surface.set_margin(my, mx, my, mx);
 
         layer_surface.set_size(0, bar_h);
-        layer_surface.set_exclusive_zone(bar_h as i32);
+        let exclusive = bar_h as i32;
+        layer_surface.set_exclusive_zone(exclusive);
         layer_surface.set_keyboard_interactivity(KeyboardInteractivity::None);
         layer_surface.commit();
 
@@ -188,9 +186,7 @@ impl BarApp {
         let output = OutputState::new(globals, qh);
         let registry = RegistryState::new(globals);
 
-        let pad_left = config.settings.padding_left.or(config.settings.padding_horizontal);
-        let pad_right = config.settings.padding_right.or(config.settings.padding_horizontal);
-        let renderer = Renderer::new(&config.settings.font, config.settings.font_size, config.settings.padding, pad_left, pad_right);
+        let renderer = Renderer::new(&config.settings.font, config.settings.font_size, &config.settings);
         let template_engine = TemplateEngine::new(&config.bar);
 
         let states: Rc<std::cell::RefCell<HashMap<String, ModuleState>>> =
@@ -299,6 +295,37 @@ impl BarApp {
             bar.layer_surface.wl_surface().commit();
         }
         self.dirty.set(true);
+    }
+
+    pub fn set_theme(&mut self, theme: crate::config::Theme) {
+        self.config.settings.theme = theme;
+        self.config.settings.layout = None;
+        self.apply_style();
+    }
+
+    pub fn set_layout(&mut self, layout: Option<crate::config::Layout>) {
+        self.config.settings.layout = layout;
+        self.apply_style();
+    }
+
+    fn apply_style(&mut self) {
+        self.renderer = Renderer::new(
+            &self.config.settings.font,
+            self.config.settings.font_size,
+            &self.config.settings,
+        );
+        let bar_h = self.renderer.bar_height();
+        let exclusive = bar_h as i32;
+        let mx = self.config.settings.margin_x() as i32;
+        let my = self.config.settings.margin_y() as i32;
+        for bar in self.bars.values() {
+            bar.layer_surface.set_size(0, bar_h);
+            bar.layer_surface.set_exclusive_zone(exclusive);
+            bar.layer_surface.set_margin(my, mx, my, mx);
+            bar.layer_surface.wl_surface().commit();
+        }
+        self.dirty.set(true);
+        log::info!("style: theme={:?} layout={:?}", self.config.settings.theme, self.config.settings.effective_layout());
     }
 
     pub fn maybe_redraw(&mut self) {
@@ -528,8 +555,12 @@ impl BarApp {
             return;
         }
 
-        let bg = config.settings.background.color
-            .with_opacity(config.settings.background.opacity * 0.85);
+        let bg_opacity = match config.settings.theme {
+            crate::config::Theme::Neumorphic => 1.0,
+            crate::config::Theme::Glass => 0.35,
+            _ => config.settings.background.opacity * 0.85,
+        };
+        let bg = config.settings.background.color.with_opacity(bg_opacity);
         let pal = Palette {
             selected: Rgba::new(255, 255, 255, 204), // 80%
             active: Rgba::new(255, 255, 255, 140),   // 55%
@@ -540,15 +571,30 @@ impl BarApp {
             .and_then(|name| config.settings.output_scales.get(name))
             .copied()
             .unwrap_or(1.0);
-        let bar_content_w = bar.width as f32 - (renderer.pad_left + renderer.pad_right) * output_mul;
+        let bar_content_w = bar.width as f32 - 2.0 * renderer.track_pad_x * output_mul;
         let output_name = bar.output_name.as_deref();
         let gap = renderer.cell_w * output_mul * 1.5;
 
-        // Pill bg = configured bar background; bar surface = transparent
-        let pill_bg = bg;
-        let surface_bg = Rgba::new(0, 0, 0, 0);
+        let (surface_bg, pill_bg) = if !config.settings.has_track() {
+            (Rgba::new(0, 0, 0, 0), bg)
+        } else {
+            {
+                let po = match config.settings.theme {
+                    crate::config::Theme::Neumorphic => 1.0,
+                    crate::config::Theme::Glass => config.settings.pill_opacity.min(0.5),
+                    _ => config.settings.pill_opacity,
+                };
+                (bg, Rgba::new(bg.r, bg.g, bg.b, (bg.a as f32 * po) as u8))
+            }
+        };
 
-        let bar_h = ((renderer.cell_h + 2.0 * renderer.padding) * output_mul).ceil() as u32;
+        let pc = crate::view::PillCfg {
+            pad_x: config.settings.pill_pad_x() * output_mul,
+            pad_y: config.settings.pill_pad_y() * output_mul,
+            radius: config.settings.effective_pill_radius(renderer.cell_h) * output_mul,
+        };
+
+        let bar_h = ((renderer.cell_h + 2.0 * renderer.pill_pad_y + 2.0 * renderer.track_pad_y) * output_mul).ceil() as u32;
         let metrics = Metrics {
             cell_w: renderer.cell_w * output_mul,
             cell_h: renderer.cell_h * output_mul,
@@ -558,19 +604,19 @@ impl BarApp {
 
         let zones: Vec<Zone> = if nav.stack.is_empty() && matches!(nav.mode, DisplayMode::Visual) {
             let icon_h = (renderer.cell_h * bar.scale as f32).ceil() as u32;
-            crate::view::root_zones(config, template_engine, states, pal, output_name, badge_overrides, toasts, gap, pill_bg, icon_h, bar_content_w, &metrics)
+            crate::view::root_zones(config, template_engine, states, pal, output_name, badge_overrides, toasts, gap, pill_bg, icon_h, bar_content_w, &metrics, &pc)
         } else {
             match nav.mode {
                 DisplayMode::Visual => {
                     let mod_id = nav.stack.first().map(|s| s.as_str());
                     crate::view::mod_zones(
-                        mod_id, config, template_engine, states, pal, output_name, interactive, gap, pill_bg,
+                        mod_id, config, template_engine, states, pal, output_name, interactive, gap, pill_bg, &pc,
                     ).unwrap_or_else(|| {
-                        crate::view::text_zones(nav, config, template_engine, states, pal, gap, pill_bg, bar_content_w, &metrics)
+                        crate::view::text_zones(nav, config, template_engine, states, pal, gap, pill_bg, bar_content_w, &metrics, &pc)
                     })
                 }
                 DisplayMode::Text => {
-                    crate::view::text_zones(nav, config, template_engine, states, pal, gap, pill_bg, bar_content_w, &metrics)
+                    crate::view::text_zones(nav, config, template_engine, states, pal, gap, pill_bg, bar_content_w, &metrics, &pc)
                 }
             }
         };
@@ -601,7 +647,8 @@ impl BarApp {
         Renderer::copy_to_wl_buffer(&pixmap, canvas);
 
         bar.layer_surface.set_size(0, bar_h);
-        bar.layer_surface.set_exclusive_zone(bar_h as i32);
+        let exclusive = bar_h as i32;
+        bar.layer_surface.set_exclusive_zone(exclusive);
         bar.layer_surface.wl_surface().set_buffer_scale(bar.scale);
         bar.layer_surface.wl_surface().attach(Some(buffer.wl_buffer()), 0, 0);
         bar.layer_surface.wl_surface().damage_buffer(0, 0, phys_w as i32, phys_h as i32);

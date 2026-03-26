@@ -4,6 +4,14 @@ use std::path::PathBuf;
 
 use crate::color::Rgba;
 
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum Layout { Pills, Detached, Attached }
+
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Theme { #[default] Flat, Neumorphic, Glass }
+
 #[derive(Debug, Deserialize)]
 pub struct Config {
     pub settings: Settings,
@@ -19,14 +27,32 @@ pub struct Settings {
     pub font: String,
     #[serde(default = "default_font_size")]
     pub font_size: f32,
-    #[serde(default = "default_padding")]
-    pub padding: f32,
     #[serde(default)]
-    pub padding_horizontal: Option<f32>,
+    pub theme: Theme,
     #[serde(default)]
-    pub padding_left: Option<f32>,
+    pub layout: Option<Layout>,
     #[serde(default)]
-    pub padding_right: Option<f32>,
+    pub margin: u32,
+    #[serde(default)]
+    pub margin_x: Option<f32>,
+    #[serde(default)]
+    pub margin_y: Option<f32>,
+    #[serde(default)]
+    pub track_padding: f32,
+    #[serde(default)]
+    pub track_padding_x: Option<f32>,
+    #[serde(default)]
+    pub track_padding_y: Option<f32>,
+    #[serde(default = "default_pill_padding")]
+    pub pill_padding: f32,
+    #[serde(default)]
+    pub pill_padding_x: Option<f32>,
+    #[serde(default)]
+    pub pill_padding_y: Option<f32>,
+    #[serde(default = "default_pill_radius")]
+    pub pill_radius: f32,
+    #[serde(default = "default_pill_opacity")]
+    pub pill_opacity: f32,
     #[serde(default)]
     pub background: Background,
     pub icons_dir: Option<String>,
@@ -34,8 +60,52 @@ pub struct Settings {
     pub icon_weight: String,
     #[serde(default)]
     pub output_scales: HashMap<String, f32>,
-    #[serde(default)]
-    pub margin: u32,
+}
+
+impl Settings {
+    pub fn effective_layout(&self) -> Layout {
+        self.layout.unwrap_or(match self.theme {
+            Theme::Flat => Layout::Pills,
+            Theme::Neumorphic => Layout::Attached,
+            Theme::Glass => Layout::Detached,
+        })
+    }
+    pub fn has_track(&self) -> bool { !matches!(self.effective_layout(), Layout::Pills) }
+    pub fn margin_x(&self) -> f32 {
+        if matches!(self.effective_layout(), Layout::Attached) { return 0.0; }
+        self.margin_x.unwrap_or(self.margin as f32)
+    }
+    pub fn margin_y(&self) -> f32 {
+        if matches!(self.effective_layout(), Layout::Attached) { return 0.0; }
+        self.margin_y.unwrap_or(self.margin as f32)
+    }
+    pub fn track_pad_x(&self) -> f32 {
+        if !self.has_track() { return 0.0; }
+        let base = self.track_padding_x.unwrap_or(self.track_padding);
+        match self.theme {
+            Theme::Neumorphic => base.max(8.0),
+            _ => base,
+        }
+    }
+    pub fn track_pad_y(&self) -> f32 {
+        if !self.has_track() { return 0.0; }
+        let base = self.track_padding_y.unwrap_or(self.track_padding);
+        match self.theme {
+            Theme::Neumorphic => base.max(8.0),
+            _ => base,
+        }
+    }
+    pub fn pill_pad_x(&self) -> f32 { self.pill_padding_x.unwrap_or(self.pill_padding) }
+    pub fn pill_pad_y(&self) -> f32 { self.pill_padding_y.unwrap_or(self.pill_padding) }
+    pub fn effective_pill_radius(&self, cell_h: f32) -> f32 {
+        match self.theme {
+            Theme::Neumorphic => {
+                let pill_h = cell_h + 2.0 * self.pill_pad_y();
+                pill_h / 2.0
+            }
+            _ => self.pill_radius,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq)]
@@ -182,14 +252,32 @@ struct RuntimeSettings {
     font: String,
     #[serde(default = "default_font_size")]
     font_size: f32,
-    #[serde(default = "default_padding")]
-    padding: f32,
     #[serde(default)]
-    padding_horizontal: Option<f32>,
+    theme: Theme,
     #[serde(default)]
-    padding_left: Option<f32>,
+    layout: Option<Layout>,
     #[serde(default)]
-    padding_right: Option<f32>,
+    margin: u32,
+    #[serde(default)]
+    margin_x: Option<f32>,
+    #[serde(default)]
+    margin_y: Option<f32>,
+    #[serde(default)]
+    track_padding: f32,
+    #[serde(default)]
+    track_padding_x: Option<f32>,
+    #[serde(default)]
+    track_padding_y: Option<f32>,
+    #[serde(default = "default_pill_padding")]
+    pill_padding: f32,
+    #[serde(default)]
+    pill_padding_x: Option<f32>,
+    #[serde(default)]
+    pill_padding_y: Option<f32>,
+    #[serde(default = "default_pill_radius")]
+    pill_radius: f32,
+    #[serde(default = "default_pill_opacity")]
+    pill_opacity: f32,
     #[serde(default)]
     background: Background,
     icons_dir: Option<String>,
@@ -197,8 +285,6 @@ struct RuntimeSettings {
     icon_weight: String,
     #[serde(default)]
     output_scales: HashMap<String, f32>,
-    #[serde(default)]
-    margin: u32,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -251,15 +337,23 @@ impl Config {
                     position: runtime.settings.position,
                     font: runtime.settings.font,
                     font_size: runtime.settings.font_size,
-                    padding: runtime.settings.padding,
-                    padding_horizontal: runtime.settings.padding_horizontal,
-                    padding_left: runtime.settings.padding_left,
-                    padding_right: runtime.settings.padding_right,
+                    theme: runtime.settings.theme,
+                    layout: runtime.settings.layout,
+                    margin: runtime.settings.margin,
+                    margin_x: runtime.settings.margin_x,
+                    margin_y: runtime.settings.margin_y,
+                    track_padding: runtime.settings.track_padding,
+                    track_padding_x: runtime.settings.track_padding_x,
+                    track_padding_y: runtime.settings.track_padding_y,
+                    pill_padding: runtime.settings.pill_padding,
+                    pill_padding_x: runtime.settings.pill_padding_x,
+                    pill_padding_y: runtime.settings.pill_padding_y,
+                    pill_radius: runtime.settings.pill_radius,
+                    pill_opacity: runtime.settings.pill_opacity,
                     background: runtime.settings.background,
                     icons_dir: runtime.settings.icons_dir,
                     icon_weight: runtime.settings.icon_weight,
                     output_scales: runtime.settings.output_scales,
-                    margin: runtime.settings.margin,
                 },
                 bar: BarDef {
                     order,
@@ -415,7 +509,9 @@ fn default_font() -> String { "monospace".into() }
 fn default_font_size() -> f32 { 14.0 }
 fn default_bg_color() -> Rgba { Rgba::new(0x22, 0x22, 0x22, 255) }
 fn default_opacity() -> f32 { 0.8 }
-fn default_padding() -> f32 { 6.0 }
+fn default_pill_padding() -> f32 { 6.0 }
+fn default_pill_radius() -> f32 { 6.0 }
+fn default_pill_opacity() -> f32 { 1.0 }
 fn default_interval() -> u64 { 5 }
 fn default_icon_weight() -> String { "light".into() }
 fn default_hook_timeout() -> u64 { 5 }

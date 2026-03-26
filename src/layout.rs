@@ -42,14 +42,15 @@ pub struct Span {
     pub elems: Vec<Elem>,
     pub bg: Option<Rgba>,
     pub radius: f32,
-    pub pad: f32,
+    pub pad_x: f32,
+    pub pad_y: f32,
     pub path: Option<String>,
     pub opacity: f32,
 }
 
 impl Span {
     pub fn new(elems: Vec<Elem>) -> Self {
-        Self { elems, bg: None, radius: 0.0, pad: 0.0, path: None, opacity: 1.0 }
+        Self { elems, bg: None, radius: 0.0, pad_x: 0.0, pad_y: 0.0, path: None, opacity: 1.0 }
     }
 
     pub fn bg(mut self, bg: Rgba) -> Self {
@@ -62,8 +63,9 @@ impl Span {
         self
     }
 
-    pub fn pad(mut self, p: f32) -> Self {
-        self.pad = p;
+    pub fn pad(mut self, px: f32, py: f32) -> Self {
+        self.pad_x = px;
+        self.pad_y = py;
         self
     }
 
@@ -197,7 +199,7 @@ impl<'a> Metrics<'a> {
         }
         let content: f32 = span.elems.iter().map(|e| self.elem_w(e)).sum();
         let gaps = (n.saturating_sub(1)) as f32 * self.cell_w * 0.5;
-        content + gaps + 2.0 * span.pad
+        content + gaps + 2.0 * span.pad_x
     }
 
     fn zone_w(&self, zone: &Zone) -> f32 {
@@ -234,17 +236,19 @@ pub fn lay(zones: &[Zone], bar_w: f32, bar_h: f32, m: &Metrics) -> Frame {
                 sx += zone.gap;
             }
             let span_w = m.span_w(span);
-            let span_rect = Rect { x: sx, y: 0.0, w: span_w, h: bar_h };
+            let span_h = m.cell_h + 2.0 * span.pad_y;
+            let span_y = (bar_h - span_h) / 2.0;
+            let span_rect = Rect { x: sx, y: span_y, w: span_w, h: span_h };
 
             // Position elems within span
-            let mut ex = sx + span.pad;
+            let mut ex = sx + span.pad_x;
             let mut felems = Vec::new();
             for (ei, elem) in span.elems.iter().enumerate() {
                 if ei > 0 {
                     ex += elem_gap;
                 }
                 let ew = m.elem_w(elem);
-                let elem_rect = Rect { x: ex, y: 0.0, w: ew, h: bar_h };
+                let elem_rect = Rect { x: ex, y: span_y + span.pad_y, w: ew, h: m.cell_h };
 
                 felems.push(FElem {
                     rect: elem_rect,

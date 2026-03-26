@@ -20,16 +20,19 @@ pub(crate) enum TextItem {
     App { exec: String, desktop_id: Option<String> },
 }
 
-const PILL_R: f32 = 6.0;
-const PILL_PAD: f32 = 6.0;
-
-fn pill(elems: Vec<Elem>, bg: Rgba) -> Span {
-    Span::new(elems).bg(bg).radius(PILL_R).pad(PILL_PAD)
+pub(crate) struct PillCfg {
+    pub pad_x: f32,
+    pub pad_y: f32,
+    pub radius: f32,
 }
 
-fn pill_bright(elems: Vec<Elem>, bg: Rgba) -> Span {
+fn pill(elems: Vec<Elem>, bg: Rgba, pc: &PillCfg) -> Span {
+    Span::new(elems).bg(bg).radius(pc.radius).pad(pc.pad_x, pc.pad_y)
+}
+
+fn pill_bright(elems: Vec<Elem>, bg: Rgba, pc: &PillCfg) -> Span {
     let bright = Rgba::new(bg.r, bg.g, bg.b, (bg.a as f32 * 1.3).min(255.0) as u8);
-    Span::new(elems).bg(bright).radius(PILL_R).pad(PILL_PAD)
+    Span::new(elems).bg(bright).radius(pc.radius).pad(pc.pad_x, pc.pad_y)
 }
 
 /// Fixed pagination: fill a page from `scroll`, flip pages when cursor hits edge.
@@ -43,6 +46,7 @@ fn window_spans(
     gap: f32,
     bg: Rgba,
     caret_fg: Rgba,
+    pc: &PillCfg,
 ) -> Vec<Span> {
     if spans.is_empty() { return spans; }
 
@@ -53,9 +57,9 @@ fn window_spans(
         return spans;
     }
 
-    let left_caret = pill(vec![Elem::text(template_engine.render_icon("caret-left")).fg(caret_fg)], bg)
+    let left_caret = pill(vec![Elem::text(template_engine.render_icon("caret-left")).fg(caret_fg)], bg, pc)
         .path("__scroll_left");
-    let right_caret = pill(vec![Elem::text(template_engine.render_icon("caret-right")).fg(caret_fg)], bg)
+    let right_caret = pill(vec![Elem::text(template_engine.render_icon("caret-right")).fg(caret_fg)], bg, pc)
         .path("__scroll_right");
     let caret_w = m.span_w(&left_caret) + gap;
 
@@ -130,6 +134,7 @@ pub(crate) fn root_zones(
     icon_h: u32,
     _bar_w: f32,
     _m: &Metrics,
+    pc: &PillCfg,
 ) -> Vec<Zone> {
     let states_ref = states.borrow();
 
@@ -152,7 +157,7 @@ pub(crate) fn root_zones(
     // Left: launcher icon
     let mut left_spans = Vec::new();
     let launcher_icon = template_engine.render_icon("terminal");
-    left_spans.push(pill(vec![Elem::text(launcher_icon).fg(pal.selected)], bg).path("launcher"));
+    left_spans.push(pill(vec![Elem::text(launcher_icon).fg(pal.selected)], bg, pc).path("launcher"));
 
     // Center: minimap + window title in one pill
     let mut center_elems = Vec::new();
@@ -177,7 +182,7 @@ pub(crate) fn root_zones(
 
     let mut center_spans = Vec::new();
     if !center_elems.is_empty() && toast_presence < 0.01 {
-        center_spans.push(pill(center_elems, bg).path("overview"));
+        center_spans.push(pill(center_elems, bg, pc).path("overview"));
     }
 
     // Right: toasts + alert badges + clock
@@ -198,7 +203,7 @@ pub(crate) fn root_zones(
             elem = elem.icon(pm.clone());
         }
         let opacity = crate::bar::toast_opacity(t);
-        right_spans.push(pill_bright(vec![elem], bg).opacity(opacity));
+        right_spans.push(pill_bright(vec![elem], bg, pc).opacity(opacity));
     }
 
     for id in &config.bar.order {
@@ -207,7 +212,7 @@ pub(crate) fn root_zones(
             _ => {
                 let badge_elems = render_badges(id);
                 for elem in badge_elems {
-                    right_spans.push(pill(vec![elem], bg));
+                    right_spans.push(pill(vec![elem], bg, pc));
                 }
             }
         }
@@ -216,7 +221,7 @@ pub(crate) fn root_zones(
     // Clock (calendar badges)
     let clock_elems = render_badges("calendar");
     if !clock_elems.is_empty() {
-        right_spans.push(pill(clock_elems, bg).path("calendar"));
+        right_spans.push(pill(clock_elems, bg, pc).path("calendar"));
     }
 
     drop(states_ref);
@@ -238,6 +243,7 @@ pub(crate) fn mod_zones(
     interactive: &HashMap<String, Box<dyn InteractiveModule>>,
     gap: f32,
     bg: Rgba,
+    pc: &PillCfg,
 ) -> Option<Vec<Zone>> {
     let id = mod_id?;
     let module = config.bar.modules.get(id)?;
@@ -253,7 +259,7 @@ pub(crate) fn mod_zones(
         drop(states_ref);
 
         let center_elems = deep.render_center(pal.selected, &data);
-        let center_span = pill(center_elems, bg);
+        let center_span = pill(center_elems, bg, pc);
 
         let mut hints = Vec::new();
         for hint in deep.key_hints() {
@@ -268,9 +274,9 @@ pub(crate) fn mod_zones(
         let breadcrumb = render_breadcrumb_elems(module, template_engine, pal.active);
 
         return Some(vec![
-            Zone::left(vec![pill(breadcrumb, bg).path("__back")], gap),
+            Zone::left(vec![pill(breadcrumb, bg, pc).path("__back")], gap),
             Zone::center(vec![center_span], gap),
-            Zone::right(vec![pill(hints, bg)], gap),
+            Zone::right(vec![pill(hints, bg, pc)], gap),
         ]);
     }
 
@@ -309,9 +315,9 @@ pub(crate) fn mod_zones(
     }
 
     Some(vec![
-        Zone::left(vec![pill(breadcrumb, bg).path("__back")], gap),
-        Zone::center(vec![pill(content, bg)], gap),
-        Zone::right(vec![pill(hints, bg)], gap),
+        Zone::left(vec![pill(breadcrumb, bg, pc).path("__back")], gap),
+        Zone::center(vec![pill(content, bg, pc)], gap),
+        Zone::right(vec![pill(hints, bg, pc)], gap),
     ])
 }
 
@@ -341,6 +347,7 @@ pub(crate) fn text_zones(
     bg: Rgba,
     bar_w: f32,
     m: &Metrics,
+    pc: &PillCfg,
 ) -> Vec<Zone> {
     let q = nav.query.to_lowercase();
 
@@ -407,7 +414,7 @@ pub(crate) fn text_zones(
         Elem::text(launcher_icon).fg(pal.selected),
         Elem::text(query_display).fg(pal.selected),
     ];
-    let left_spans = vec![pill(left_elems, bg)];
+    let left_spans = vec![pill(left_elems, bg, pc)];
 
     // Center: result items as individual pill spans
     let center_spans: Vec<Span> = items.iter().enumerate().map(|(i, (text, _, icon))| {
@@ -419,16 +426,16 @@ pub(crate) fn text_zones(
         }
         elems.push(Elem::text(text.clone()).fg(item_fg));
         if is_sel {
-            pill_bright(elems, bg)
+            pill_bright(elems, bg, pc)
         } else {
-            pill(elems, bg)
+            pill(elems, bg, pc)
         }
     }).collect();
 
     // Right: count
     let count_text = format!("{}/{}", items.len(), total);
     let right_elems = vec![Elem::text(count_text).fg(pal.idle)];
-    let right_spans = vec![pill(right_elems, bg)];
+    let right_spans = vec![pill(right_elems, bg, pc)];
 
     // Apply windowing to center spans
     let left_w: f32 = left_spans.iter().map(|s| m.span_w(s)).sum::<f32>()
@@ -438,7 +445,7 @@ pub(crate) fn text_zones(
     let center_avail = bar_w - left_w - right_w - 2.0 * gap;
     let center_spans = window_spans(
         center_spans, nav.selected, &mut nav.scroll,
-        center_avail, m, template_engine, gap, bg, pal.idle,
+        center_avail, m, template_engine, gap, bg, pal.idle, pc,
     );
 
     vec![

@@ -14,6 +14,7 @@ pub enum Cmd {
     Launcher,
     Dismiss,
     State,
+    Style(String),
     Module(Vec<String>),
 }
 
@@ -24,7 +25,10 @@ pub fn build_cli() -> Command {
         .arg(Arg::new("config").long("config").help("Config file path"))
         .subcommand(Command::new("launcher").about("Toggle the launcher"))
         .subcommand(Command::new("dismiss").about("Dismiss the current view"))
-        .subcommand(Command::new("state").about("Print bar state as JSON"));
+        .subcommand(Command::new("state").about("Print bar state as JSON"))
+        .subcommand(Command::new("style").about("Set bar style at runtime")
+            .arg(Arg::new("name").required(true)
+                .help("floating, attached, neumorphic, or glass")));
 
     for (id, name, cmds) in MOD_META {
         let mut sub = Command::new(*id)
@@ -64,6 +68,10 @@ pub fn parse() -> Cli {
         Some(("launcher", _)) => Some(Cmd::Launcher),
         Some(("dismiss", _)) => Some(Cmd::Dismiss),
         Some(("state", _)) => Some(Cmd::State),
+        Some(("style", sub)) => {
+            let name = sub.get_one::<String>("name").cloned().unwrap_or_default();
+            Some(Cmd::Style(name))
+        }
         Some((name, sub)) => {
             let mut args = vec![name.to_string()];
             if let Some((action, _)) = sub.subcommand() {
@@ -84,6 +92,7 @@ pub fn run_cmd(cmd: Cmd) {
         Cmd::Launcher => ipc::send_request(&IpcRequest::Launcher),
         Cmd::Dismiss => ipc::send_request(&IpcRequest::Dismiss),
         Cmd::State => ipc::send_request(&IpcRequest::State),
+        Cmd::Style(name) => ipc::send_request(&IpcRequest::SetStyle { style: name }),
         Cmd::Module(args) => run_module_cmd(&args),
     }
 }

@@ -29,6 +29,8 @@ pub enum IpcRequest {
     Type { text: String },
     #[serde(rename = "key")]
     Key { key: String },
+    #[serde(rename = "style")]
+    SetStyle { style: String },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -206,6 +208,18 @@ fn dispatch(req: IpcRequest, app: &mut BarApp) -> IpcResponse {
         IpcRequest::Key { key } => {
             let event = build_key_event(&key);
             app.handle_key(event);
+            state_response(app)
+        }
+        IpcRequest::SetStyle { style } => {
+            match style.as_str() {
+                "flat" => app.set_theme(crate::config::Theme::Flat),
+                "neumorphic" => app.set_theme(crate::config::Theme::Neumorphic),
+                "glass" => app.set_theme(crate::config::Theme::Glass),
+                "pills" => app.set_layout(Some(crate::config::Layout::Pills)),
+                "detached" => app.set_layout(Some(crate::config::Layout::Detached)),
+                "attached" => app.set_layout(Some(crate::config::Layout::Attached)),
+                _ => return IpcResponse::err(&format!("unknown style: {style}. use: flat, neumorphic, glass, pills, detached, attached")),
+            };
             state_response(app)
         }
     }

@@ -7,8 +7,8 @@ in
     position = "top";
     font = "monospace";
     font-size = 14;
-    padding = 6;
-    padding-horizontal = 12;
+    pill-padding = 6;
+    pill-radius = 6;
     icon-weight = "duotone";
     background = {
       color = "#222222";
