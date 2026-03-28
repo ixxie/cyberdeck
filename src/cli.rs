@@ -11,6 +11,7 @@ pub struct Cli {
 }
 
 pub enum Cmd {
+    Init,
     Launcher,
     Dismiss,
     State,
@@ -23,12 +24,13 @@ pub fn build_cli() -> Command {
         .version(env!("CARGO_PKG_VERSION"))
         .about("Wayland status bar")
         .arg(Arg::new("config").long("config").help("Config file path"))
+        .subcommand(Command::new("init").about("Create default config.toml"))
         .subcommand(Command::new("launcher").about("Toggle the launcher"))
         .subcommand(Command::new("dismiss").about("Dismiss the current view"))
         .subcommand(Command::new("state").about("Print bar state as JSON"))
         .subcommand(Command::new("style").about("Set bar style at runtime")
             .arg(Arg::new("name").required(true)
-                .help("floating, attached, neumorphic, or glass")));
+                .help("classic, floating, pills, or transparent")));
 
     for (id, name, cmds) in MOD_META {
         let mut sub = Command::new(*id)
@@ -65,6 +67,7 @@ pub fn parse() -> Cli {
     let config = matches.get_one::<String>("config").cloned();
 
     let cmd = match matches.subcommand() {
+        Some(("init", _)) => Some(Cmd::Init),
         Some(("launcher", _)) => Some(Cmd::Launcher),
         Some(("dismiss", _)) => Some(Cmd::Dismiss),
         Some(("state", _)) => Some(Cmd::State),
@@ -89,6 +92,7 @@ pub fn parse() -> Cli {
 
 pub fn run_cmd(cmd: Cmd) {
     match cmd {
+        Cmd::Init => run_init(),
         Cmd::Launcher => ipc::send_request(&IpcRequest::Launcher),
         Cmd::Dismiss => ipc::send_request(&IpcRequest::Dismiss),
         Cmd::State => ipc::send_request(&IpcRequest::State),
@@ -96,6 +100,106 @@ pub fn run_cmd(cmd: Cmd) {
         Cmd::Module(args) => run_module_cmd(&args),
     }
 }
+
+fn run_init() {
+    let dir = crate::config::Config::config_dir();
+    let path = dir.join("config.toml");
+    if path.exists() {
+        eprintln!("config already exists: {}", path.display());
+        std::process::exit(1);
+    }
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        eprintln!("failed to create config dir: {e}");
+        std::process::exit(1);
+    }
+    if let Err(e) = std::fs::write(&path, CONFIG_TEMPLATE) {
+        eprintln!("failed to write config: {e}");
+        std::process::exit(1);
+    }
+    eprintln!("created {}", path.display());
+    eprintln!("edit the file to enable modules and customize settings");
+}
+
+const CONFIG_TEMPLATE: &str = r##"# Cyberdeck configuration
+# Uncomment and modify options as needed.
+
+[settings]
+# position = "top"          # top or bottom
+# font = "monospace"
+# font-size = 14
+# layout = "pills"          # classic, floating, pills, or transparent
+# gap = 6                   # spacing between visual elements (px)
+# scale = 1.0               # global UI scale
+# icon-weight = "light"     # regular, bold, thin, light, fill, or duotone
+
+# [settings.theme]
+# color = "#222222"
+# opacity = 0.8
+# radius = 6
+# padding = 6
+#
+# [settings.theme.track]    # bar background overrides
+# color = "#222222"
+# opacity = 1.0
+#
+# [settings.theme.pill]     # pill overrides
+# opacity = 1.0
+# radius = 8
+
+# [settings.monitors.DP-1]
+# scale = 1.5
+
+# === Modules ===
+# Uncomment a module section to enable it.
+# Each module may require external tools — see notes below.
+
+# --- No dependencies ---
+
+[bar.modules.calendar]      # clock & calendar
+[bar.modules.window]        # window title
+[bar.modules.workspaces]    # workspace info (niri)
+[bar.modules.system]        # cpu, memory, uptime
+[bar.modules.storage]       # disk usage
+
+# --- Optional dependencies ---
+
+# [bar.modules.notifications]   # desktop notifications
+                                # deps: libnotify
+
+# [bar.modules.network]         # wifi & ethernet
+                                # deps (apt): network-manager
+                                # deps (pacman): networkmanager
+
+# [bar.modules.bluetooth]       # bluetooth devices
+                                # deps: bluez / bluez-utils
+
+# [bar.modules.brightness]      # screen brightness
+                                # deps: brightnessctl
+
+# [bar.modules.outputs]         # audio output / speakers
+                                # deps: wireplumber
+
+# [bar.modules.inputs]          # audio input / microphone
+                                # deps: wireplumber
+
+# [bar.modules.media]           # now playing
+                                # deps: playerctl
+
+# [bar.modules.session]         # power & session controls
+                                # deps: upower
+
+# [bar.modules.weather]         # weather forecast
+                                # deps: curl
+# location = "London"           # optional: city name for wttr.in
+
+# [bar.modules.snip]            # screenshots & recording
+                                # deps: grim, slurp, wl-clipboard
+                                # deps (recording): wl-screenrec
+
+# [bar.modules.wallpaper]       # wallpaper cycling
+                                # deps: swww
+# dir = "~/Pictures/wallpapers"
+"##;
 
 fn run_module_cmd(args: &[String]) {
     if args.is_empty() {

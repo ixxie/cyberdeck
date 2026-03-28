@@ -42,7 +42,7 @@ impl ActionPalette {
 }
 
 impl InteractiveModule for ActionPalette {
-    fn render_center(&self, fg: Rgba, _data: &serde_json::Value) -> Vec<Elem> {
+    fn render_center(&self, fg: Rgba, _data: &serde_json::Value) -> Vec<Vec<Elem>> {
         let idle_fg = Rgba::new(fg.r, fg.g, fg.b, (fg.a as f32 * 0.44) as u8);
 
         self.actions.iter().enumerate().map(|(i, action)| {
@@ -53,9 +53,11 @@ impl InteractiveModule for ActionPalette {
                 text.push(' ');
             }
             text.push_str(&format!("{} ({})", action.label, action.key));
-            Elem::text(text).fg(item_fg)
+            vec![Elem::text(text).fg(item_fg)]
         }).collect()
     }
+
+    fn cursor(&self) -> Option<usize> { Some(self.cursor) }
 
     fn breadcrumb(&self) -> Vec<String> {
         vec![self.name.clone()]

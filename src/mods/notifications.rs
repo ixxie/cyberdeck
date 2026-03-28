@@ -63,21 +63,20 @@ impl NotificationsDeep {
 }
 
 impl InteractiveModule for NotificationsDeep {
-    fn render_center(&self, fg: Rgba, data: &Value) -> Vec<Elem> {
+    fn render_center(&self, fg: Rgba, data: &Value) -> Vec<Vec<Elem>> {
         let active_fg = Rgba::new(fg.r, fg.g, fg.b, (fg.a as f32 * 0.72) as u8);
         let idle_fg = Rgba::new(fg.r, fg.g, fg.b, (fg.a as f32 * 0.44) as u8);
 
         let notifs = match self.notifs(data) {
             Some(n) if !n.is_empty() => n,
-            _ => return vec![Elem::text("no notifications").fg(idle_fg)],
+            _ => return vec![vec![Elem::text("no notifications").fg(idle_fg)]],
         };
 
-        // Grab pixmaps from the store
         let store = notifications::STORE.lock().unwrap();
         let stored = store.all();
         drop(store);
 
-        let mut widgets = Vec::new();
+        let mut items = Vec::new();
         for (i, n) in notifs.iter().enumerate() {
             let summary = n.get("summary").and_then(|v| v.as_str()).unwrap_or("");
             let body = n.get("body").and_then(|v| v.as_str()).unwrap_or("");
@@ -99,18 +98,19 @@ impl InteractiveModule for NotificationsDeep {
             };
             let mut widget = Elem::text(label).fg(nfg);
 
-            // Attach icon pixmap if available
             if let Some(sn) = stored.iter().find(|s| s.id == id) {
                 if let Some(ref pm) = sn.icon_pixmap {
                     widget = widget.icon(pm.clone());
                 }
             }
 
-            widgets.push(widget);
+            items.push(vec![widget]);
         }
 
-        widgets
+        items
     }
+
+    fn cursor(&self) -> Option<usize> { Some(self.cursor) }
 
     fn breadcrumb(&self) -> Vec<String> {
         vec![]

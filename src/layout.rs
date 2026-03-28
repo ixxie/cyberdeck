@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use taffy::prelude::*;
 use tiny_skia::Pixmap;
 use unicode_width::UnicodeWidthChar;
 
@@ -185,9 +186,11 @@ impl<'a> Metrics<'a> {
         pm.width() as f32 / self.scale
     }
 
+    pub fn elem_gap(&self) -> f32 { self.cell_w * 0.5 }
+
     pub fn elem_w(&self, elem: &Elem) -> f32 {
         let icon_w = elem.icon.as_ref()
-            .map(|pm| self.icon_w(pm) + self.cell_w * 0.5)
+            .map(|pm| self.icon_w(pm) + self.elem_gap())
             .unwrap_or(0.0);
         icon_w + self.text_w(&elem.text)
     }
@@ -198,90 +201,191 @@ impl<'a> Metrics<'a> {
             return 0.0;
         }
         let content: f32 = span.elems.iter().map(|e| self.elem_w(e)).sum();
-        let gaps = (n.saturating_sub(1)) as f32 * self.cell_w * 0.5;
+        let gaps = (n.saturating_sub(1)) as f32 * self.elem_gap();
         content + gaps + 2.0 * span.pad_x
-    }
-
-    fn zone_w(&self, zone: &Zone) -> f32 {
-        let n = zone.spans.len();
-        if n == 0 {
-            return 0.0;
-        }
-        let content: f32 = zone.spans.iter().map(|s| self.span_w(s)).sum();
-        let gaps = (n.saturating_sub(1)) as f32 * zone.gap;
-        content + gaps
     }
 }
 
-// === Layout algorithm ===
+// === Taffy-based layout ===
 
-pub fn lay(zones: &[Zone], bar_w: f32, bar_h: f32, m: &Metrics) -> Frame {
-    let mut spans = Vec::new();
-    let mut hits = Vec::new();
-    let elem_gap = m.cell_w * 0.5;
+fn length(v: f32) -> LengthPercentage {
+    LengthPercentage::Length(v)
+}
 
-    for zone in zones {
-        let zone_w = m.zone_w(zone);
+pub fn lay(zones: &[Zone], bar_w: f32, bar_h: f32, track_pad: f32, m: &Metrics) -> Frame {
+    let mut tree = TaffyTree::<()>::new();
+    let elem_gap = m.elem_gap();
 
-        // Zone anchor x
-        let zone_x = match zone.align {
-            Align::Left => 0.0,
-            Align::Center => (bar_w - zone_w) / 2.0,
-            Align::Right => bar_w - zone_w,
+    // Track (zone_idx, span_idx, elem_idx) → taffy node for reading back positions
+    struct SpanInfo {
+        node: NodeId,
+        span_idx: usize,
+        zone_idx: usize,
+        elem_nodes: Vec<NodeId>,
+    }
+    let mut span_infos: Vec<SpanInfo> = Vec::new();
+
+    let mut zone_nodes = Vec::new();
+
+    for (zi, zone) in zones.iter().enumerate() {
+        let mut span_nodes = Vec::new();
+
+        for (si, span) in zone.spans.iter().enumerate() {
+            // Elem leaves
+            let mut elem_nodes = Vec::new();
+            for elem in &span.elems {
+                let ew = m.elem_w(elem);
+                let node = tree.new_leaf(Style {
+                    size: Size {
+                        width: Dimension::Length(ew),
+                        height: Dimension::Length(m.cell_h),
+                    },
+                    ..Default::default()
+                }).unwrap();
+                elem_nodes.push(node);
+            }
+
+            // Span container: row, padding, gap between elems
+            let span_node = tree.new_with_children(
+                Style {
+                    display: Display::Flex,
+                    flex_direction: FlexDirection::Row,
+                    align_items: Some(AlignItems::Center),
+                    padding: taffy::prelude::Rect {
+                        left: length(span.pad_x),
+                        right: length(span.pad_x),
+                        top: length(span.pad_y),
+                        bottom: length(span.pad_y),
+                    },
+                    gap: Size {
+                        width: length(elem_gap),
+                        height: length(0.0),
+                    },
+                    ..Default::default()
+                },
+                &elem_nodes,
+            ).unwrap();
+
+            span_infos.push(SpanInfo {
+                node: span_node,
+                span_idx: si,
+                zone_idx: zi,
+                elem_nodes,
+            });
+            span_nodes.push(span_node);
+        }
+
+        // Zone container: row with alignment
+        let justify = match zone.align {
+            Align::Left => JustifyContent::FlexStart,
+            Align::Center => JustifyContent::Center,
+            Align::Right => JustifyContent::FlexEnd,
         };
 
-        let mut sx = zone_x;
-        for (si, span) in zone.spans.iter().enumerate() {
-            if si > 0 {
-                sx += zone.gap;
-            }
-            let span_w = m.span_w(span);
-            let span_h = m.cell_h + 2.0 * span.pad_y;
-            let span_y = (bar_h - span_h) / 2.0;
-            let span_rect = Rect { x: sx, y: span_y, w: span_w, h: span_h };
+        let zone_node = tree.new_with_children(
+            Style {
+                display: Display::Flex,
+                flex_direction: FlexDirection::Row,
+                justify_content: Some(justify),
+                align_items: Some(AlignItems::Center),
+                // Zone is absolutely positioned to overlay with other zones
+                position: Position::Absolute,
+                inset: taffy::prelude::Rect {
+                    left: LengthPercentageAuto::Length(0.0),
+                    right: LengthPercentageAuto::Length(0.0),
+                    top: LengthPercentageAuto::Length(0.0),
+                    bottom: LengthPercentageAuto::Length(0.0),
+                },
+                size: Size {
+                    width: Dimension::Percent(1.0),
+                    height: Dimension::Percent(1.0),
+                },
+                gap: Size {
+                    width: length(zone.gap),
+                    height: length(0.0),
+                },
+                ..Default::default()
+            },
+            &span_nodes,
+        ).unwrap();
 
-            // Position elems within span
-            let mut ex = sx + span.pad_x;
-            let mut felems = Vec::new();
-            for (ei, elem) in span.elems.iter().enumerate() {
-                if ei > 0 {
-                    ex += elem_gap;
-                }
-                let ew = m.elem_w(elem);
-                let elem_rect = Rect { x: ex, y: span_y + span.pad_y, w: ew, h: m.cell_h };
+        zone_nodes.push(zone_node);
+    }
 
-                felems.push(FElem {
-                    rect: elem_rect,
-                    text: elem.text.clone(),
-                    fg: elem.fg,
-                    icon: elem.icon.clone(),
-                });
+    // Root: the bar, with track padding as horizontal inset
+    let root = tree.new_with_children(
+        Style {
+            display: Display::Flex,
+            size: Size {
+                width: Dimension::Length(bar_w),
+                height: Dimension::Length(bar_h),
+            },
+            padding: taffy::prelude::Rect {
+                left: length(track_pad),
+                right: length(track_pad),
+                top: length(0.0),
+                bottom: length(0.0),
+            },
+            ..Default::default()
+        },
+        &zone_nodes,
+    ).unwrap();
 
-                // Elem-level hit area (only if span has no path)
-                if span.path.is_none() {
-                    if let Some(ref p) = elem.path {
-                        hits.push(Hit { rect: elem_rect, path: p.clone() });
-                    }
-                }
+    tree.compute_layout(root, Size::MAX_CONTENT).unwrap();
 
-                ex += ew;
-            }
+    // Read back positions and build Frame
+    let mut spans = Vec::new();
+    let mut hits = Vec::new();
 
-            // Span-level hit area
-            if let Some(ref p) = span.path {
-                hits.push(Hit { rect: span_rect, path: p.clone() });
-            }
+    for info in &span_infos {
+        let span = &zones[info.zone_idx].spans[info.span_idx];
+        let sl = tree.layout(info.node).unwrap();
+        let zl = tree.layout(zone_nodes[info.zone_idx]).unwrap();
 
-            spans.push(FSpan {
-                rect: span_rect,
-                bg: span.bg,
-                radius: span.radius,
-                opacity: span.opacity,
-                elems: felems,
+        let span_rect = Rect {
+            x: zl.location.x + sl.location.x,
+            y: zl.location.y + sl.location.y,
+            w: sl.size.width,
+            h: sl.size.height,
+        };
+
+        let mut felems = Vec::new();
+        for (ei, &enode) in info.elem_nodes.iter().enumerate() {
+            let el = tree.layout(enode).unwrap();
+            let elem = &span.elems[ei];
+
+            let elem_rect = Rect {
+                x: span_rect.x + el.location.x,
+                y: span_rect.y + el.location.y,
+                w: el.size.width,
+                h: el.size.height,
+            };
+
+            felems.push(FElem {
+                rect: elem_rect,
+                text: elem.text.clone(),
+                fg: elem.fg,
+                icon: elem.icon.clone(),
             });
 
-            sx += span_w;
+            if span.path.is_none() {
+                if let Some(ref p) = elem.path {
+                    hits.push(Hit { rect: elem_rect, path: p.clone() });
+                }
+            }
         }
+
+        if let Some(ref p) = span.path {
+            hits.push(Hit { rect: span_rect, path: p.clone() });
+        }
+
+        spans.push(FSpan {
+            rect: span_rect,
+            bg: span.bg,
+            radius: span.radius,
+            opacity: span.opacity,
+            elems: felems,
+        });
     }
 
     Frame { spans, hits }

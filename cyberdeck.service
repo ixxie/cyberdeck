@@ -1,0 +1,14 @@
+[Unit]
+Description=Cyberdeck desktop shell
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecStart=%h/.local/bin/cyberdeck
+Restart=on-failure
+RestartSec=2
+Environment=WAYLAND_DISPLAY=wayland-1
+Environment=RUST_LOG=cyberdeck=info
+
+[Install]
+WantedBy=graphical-session.target

@@ -220,7 +220,8 @@ impl BarApp {
         let Some(bar_id) = self.bar_id_for_surface(surface) else { return };
         let Some(bar) = self.bars.get(&bar_id) else { return };
 
-        let px = x as f32 - self.renderer.track_pad_x;
+        let track_pad = self.config.settings.resolve_track().padding;
+        let px = x as f32 - track_pad;
         let py = y as f32;
 
         let Some(frame) = &bar.frame else { return };

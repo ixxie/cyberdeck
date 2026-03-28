@@ -83,8 +83,9 @@ impl BarInstance {
         config: &Config,
         renderer: &Renderer,
         qh: &QueueHandle<BarApp>,
+        icon_map: &HashMap<String, String>,
     ) -> Self {
-        let bar_h = renderer.bar_height();
+        let bar_h = renderer.bar_height(&config.settings);
         let surface = compositor.create_surface(qh);
         let layer_surface = layer_shell.create_layer_surface(
             qh, surface, Layer::Top, Some("cyberdeck"), Some(output),
@@ -95,9 +96,8 @@ impl BarInstance {
             Position::Bottom => Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
         };
         layer_surface.set_anchor(anchor);
-        let mx = config.settings.margin_x() as i32;
-        let my = config.settings.margin_y() as i32;
-        layer_surface.set_margin(my, mx, my, mx);
+        let m = config.settings.margin() as i32;
+        layer_surface.set_margin(m, m, m, m);
 
         layer_surface.set_size(0, bar_h);
         let exclusive = bar_h as i32;
@@ -114,6 +114,7 @@ impl BarInstance {
             config.settings.icons_dir.as_deref(),
             &config.settings.icon_weight,
             renderer.cell_h * initial_scale as f32,
+            icon_map,
         );
         Self {
             layer_surface,
@@ -157,6 +158,10 @@ pub struct BarApp {
     pub spotlight_token: Option<RegistrationToken>,
     pub interactive: HashMap<String, Box<dyn InteractiveModule>>,
     pub nav_changed: Instant,
+    pub icon_map: HashMap<String, String>,
+    prev_focused_ws: Option<i64>,
+    prev_focused_win: Option<(i64, i64)>,
+    nav_toast_id: Option<u64>,
 }
 
 pub struct Toast {
@@ -164,6 +169,7 @@ pub struct Toast {
     pub text: String,
     pub icon: Option<String>,
     pub icon_pixmap: Option<std::sync::Arc<tiny_skia::Pixmap>>,
+    pub elems: Vec<crate::layout::Elem>,
     pub token: RegistrationToken,
     pub created: Instant,
     pub lifetime: Duration,
@@ -187,7 +193,8 @@ impl BarApp {
         let registry = RegistryState::new(globals);
 
         let renderer = Renderer::new(&config.settings.font, config.settings.font_size, &config.settings);
-        let template_engine = TemplateEngine::new(&config.bar);
+        let icon_map = crate::icons::discover(config.settings.icons_dir.as_deref());
+        let template_engine = TemplateEngine::new(&config.bar, &icon_map);
 
         let states: Rc<std::cell::RefCell<HashMap<String, ModuleState>>> =
             Rc::new(std::cell::RefCell::new(HashMap::new()));
@@ -265,6 +272,10 @@ impl BarApp {
             spotlight_token: None,
             interactive,
             nav_changed: Instant::now(),
+            icon_map,
+            prev_focused_ws: None,
+            prev_focused_win: None,
+            nav_toast_id: None,
         }
     }
 
@@ -297,13 +308,7 @@ impl BarApp {
         self.dirty.set(true);
     }
 
-    pub fn set_theme(&mut self, theme: crate::config::Theme) {
-        self.config.settings.theme = theme;
-        self.config.settings.layout = None;
-        self.apply_style();
-    }
-
-    pub fn set_layout(&mut self, layout: Option<crate::config::Layout>) {
+    pub fn set_layout(&mut self, layout: crate::config::Layout) {
         self.config.settings.layout = layout;
         self.apply_style();
     }
@@ -314,18 +319,17 @@ impl BarApp {
             self.config.settings.font_size,
             &self.config.settings,
         );
-        let bar_h = self.renderer.bar_height();
+        let bar_h = self.renderer.bar_height(&self.config.settings);
         let exclusive = bar_h as i32;
-        let mx = self.config.settings.margin_x() as i32;
-        let my = self.config.settings.margin_y() as i32;
+        let m = self.config.settings.margin() as i32;
         for bar in self.bars.values() {
             bar.layer_surface.set_size(0, bar_h);
             bar.layer_surface.set_exclusive_zone(exclusive);
-            bar.layer_surface.set_margin(my, mx, my, mx);
+            bar.layer_surface.set_margin(m, m, m, m);
             bar.layer_surface.wl_surface().commit();
         }
         self.dirty.set(true);
-        log::info!("style: theme={:?} layout={:?}", self.config.settings.theme, self.config.settings.effective_layout());
+        log::info!("style: layout={:?}", self.config.settings.layout);
     }
 
     pub fn maybe_redraw(&mut self) {
@@ -336,6 +340,7 @@ impl BarApp {
         if !self.dirty.get() {
             return;
         }
+        self.check_ws_changes();
         self.process_hooks();
         let qh = self.qh.clone();
         let nav_age = self.nav_changed.elapsed();
@@ -441,6 +446,88 @@ impl BarApp {
         }
     }
 
+    /// Detect workspace/window focus changes and emit indicator toasts.
+    /// Uses a single replaceable toast slot to avoid stacking.
+    fn check_ws_changes(&mut self) {
+        let states = self.states.borrow();
+        let Some(ws_state) = states.get("workspaces") else { return };
+        if !ws_state.dirty { return; }
+        let data = &ws_state.data;
+
+        let workspaces = data.get("workspaces").and_then(|v| v.as_array());
+        let windows = data.get("windows").and_then(|v| v.as_array());
+
+        let cur_ws = workspaces.and_then(|wss| {
+            wss.iter().find(|ws| ws.get("focused").and_then(|v| v.as_bool()).unwrap_or(false))
+                .and_then(|ws| ws.get("id").and_then(|v| v.as_i64()))
+        });
+
+        let cur_win = windows.and_then(|wins| {
+            wins.iter().find(|w| w.get("focused").and_then(|v| v.as_bool()).unwrap_or(false))
+                .map(|w| {
+                    let col = w.get("col").and_then(|v| v.as_i64()).unwrap_or(0);
+                    let row = w.get("row").and_then(|v| v.as_i64()).unwrap_or(0);
+                    (col, row)
+                })
+        });
+
+        let ws_changed = cur_ws.is_some() && self.prev_focused_ws.is_some()
+            && cur_ws != self.prev_focused_ws;
+        let win_changed = cur_win.is_some() && self.prev_focused_win.is_some()
+            && cur_win != self.prev_focused_win;
+
+        let toast_elems = if ws_changed {
+            workspaces.map(|wss| crate::view::ws_indicator_elems(wss, &self.template_engine))
+        } else if win_changed {
+            workspaces.zip(windows).map(|(wss, wins)| crate::view::win_indicator_elems(wss, wins, &self.template_engine))
+        } else {
+            None
+        };
+
+        self.prev_focused_ws = cur_ws;
+        self.prev_focused_win = cur_win;
+        drop(states);
+
+        if let Some(elems) = toast_elems {
+            if !elems.is_empty() {
+                if let Some(tid) = self.nav_toast_id.take() {
+                    self.remove_toast(tid);
+                }
+                let tid = self.set_nav_toast(elems);
+                self.nav_toast_id = Some(tid);
+            }
+        }
+    }
+
+    fn set_nav_toast(&mut self, elems: Vec<crate::layout::Elem>) -> u64 {
+        let tid = NEXT_TOAST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let nav_tid = tid;
+        let token = self.loop_handle.insert_source(
+            Timer::from_duration(Duration::from_secs(2)),
+            move |_, _, app| {
+                app.remove_toast(nav_tid);
+                if app.nav_toast_id == Some(nav_tid) {
+                    app.nav_toast_id = None;
+                }
+                app.dirty.set(true);
+                TimeoutAction::Drop
+            },
+        ).expect("failed to set nav toast timer");
+
+        self.toasts.push(Toast {
+            toast_id: tid,
+            text: String::new(),
+            icon: None,
+            icon_pixmap: None,
+            elems,
+            token,
+            created: Instant::now(),
+            lifetime: Duration::from_secs(2),
+        });
+        self.dirty.set(true);
+        tid
+    }
+
     pub fn set_toast(&mut self, text: &str, icon: Option<String>, timeout: u64) {
         self.add_toast_with_pixmap(text, icon, None, timeout);
     }
@@ -473,6 +560,7 @@ impl BarApp {
             text: text.to_string(),
             icon,
             icon_pixmap,
+            elems: Vec::new(),
             token,
             created: Instant::now(),
             lifetime: Duration::from_secs(timeout),
@@ -555,46 +643,31 @@ impl BarApp {
             return;
         }
 
-        let bg_opacity = match config.settings.theme {
-            crate::config::Theme::Neumorphic => 1.0,
-            crate::config::Theme::Glass => 0.35,
-            _ => config.settings.background.opacity * 0.85,
-        };
-        let bg = config.settings.background.color.with_opacity(bg_opacity);
+        let track = config.settings.resolve_track();
+        let pill = config.settings.resolve_pill();
         let pal = Palette {
             selected: Rgba::new(255, 255, 255, 204), // 80%
             active: Rgba::new(255, 255, 255, 140),   // 55%
             idle: Rgba::new(255, 255, 255, 89),      // 35%
         };
 
-        let output_mul = bar.output_name.as_ref()
-            .and_then(|name| config.settings.output_scales.get(name))
-            .copied()
-            .unwrap_or(1.0);
-        let bar_content_w = bar.width as f32 - 2.0 * renderer.track_pad_x * output_mul;
+        let output_mul = config.settings.monitor_scale(bar.output_name.as_deref());
+        let bar_w = bar.width as f32;
+        let track_pad = track.padding * output_mul;
         let output_name = bar.output_name.as_deref();
-        let gap = renderer.cell_w * output_mul * 1.5;
+        let gap = config.settings.gap * output_mul;
 
-        let (surface_bg, pill_bg) = if !config.settings.has_track() {
-            (Rgba::new(0, 0, 0, 0), bg)
-        } else {
-            {
-                let po = match config.settings.theme {
-                    crate::config::Theme::Neumorphic => 1.0,
-                    crate::config::Theme::Glass => config.settings.pill_opacity.min(0.5),
-                    _ => config.settings.pill_opacity,
-                };
-                (bg, Rgba::new(bg.r, bg.g, bg.b, (bg.a as f32 * po) as u8))
-            }
-        };
+        let track_bg = track.color.with_opacity(track.opacity * config.settings.theme.opacity);
+        let pill_bg = pill.color.with_opacity(pill.opacity * config.settings.theme.opacity);
+        let surface_bg = if track.opacity > 0.0 { track_bg } else { Rgba::new(0, 0, 0, 0) };
 
         let pc = crate::view::PillCfg {
-            pad_x: config.settings.pill_pad_x() * output_mul,
-            pad_y: config.settings.pill_pad_y() * output_mul,
-            radius: config.settings.effective_pill_radius(renderer.cell_h) * output_mul,
+            padding: pill.padding * output_mul,
+            radius: pill.radius * output_mul,
         };
 
-        let bar_h = ((renderer.cell_h + 2.0 * renderer.pill_pad_y + 2.0 * renderer.track_pad_y) * output_mul).ceil() as u32;
+        let bar_h = ((renderer.cell_h + 2.0 * pill.padding + 2.0 * track.padding) * output_mul).ceil() as u32;
+        let bar_content_w = bar_w - 2.0 * track_pad;
         let metrics = Metrics {
             cell_w: renderer.cell_w * output_mul,
             cell_h: renderer.cell_h * output_mul,
@@ -620,7 +693,7 @@ impl BarApp {
                 }
             }
         };
-        let mut frame = lay(&zones, bar_content_w, bar_h as f32, &metrics);
+        let mut frame = lay(&zones, bar_w, bar_h as f32, track_pad, &metrics);
 
         // Nav transition: ease-in over 300ms
         let nav_fade = ease_out((nav_age.as_secs_f32() / 0.3).min(1.0));
@@ -682,6 +755,7 @@ impl CompositorHandler for BarApp {
                     self.config.settings.icons_dir.as_deref(),
                     &self.config.settings.icon_weight,
                     self.renderer.cell_h * new_scale as f32,
+                    &self.icon_map,
                 );
                 log::info!("scale factor changed to {new_scale} (output reports {factor})");
             }
@@ -754,7 +828,7 @@ impl OutputHandler for BarApp {
         let bar = BarInstance::new(
             &output, name,
             &self.compositor, &self.layer_shell, &self.shm,
-            &self.config, &self.renderer, qh,
+            &self.config, &self.renderer, qh, &self.icon_map,
         );
         self.bars.insert(id, bar);
 

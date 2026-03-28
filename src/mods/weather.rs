@@ -1,16 +1,22 @@
 use serde_json::{json, Value};
 use std::process::Command;
 
-pub fn poll(_params: &serde_json::Map<String, Value>) -> Value {
-    match fetch_weather() {
+pub fn poll(params: &serde_json::Map<String, Value>) -> Value {
+    let location = params.get("location").and_then(|v| v.as_str()).unwrap_or("");
+    match fetch_weather(location) {
         Some(v) => v,
         None => default_weather(),
     }
 }
 
-fn fetch_weather() -> Option<Value> {
+fn fetch_weather(location: &str) -> Option<Value> {
+    let url = if location.is_empty() {
+        "wttr.in/?format=j1".to_string()
+    } else {
+        format!("wttr.in/{}?format=j1", location)
+    };
     let output = Command::new("curl")
-        .args(["-sf", "wttr.in/?format=j1"])
+        .args(["-sf", &url])
         .output()
         .ok()?;
 

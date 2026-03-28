@@ -28,31 +28,32 @@ This is also a **launcher** and will find apps when you type:
 
 ## Modules
 
-- **calendar** — clock; navigate in for a weekly calendar view with day/month/year navigation
-- **workspaces** — workspace indicators per output (hexagon icons, active/dim)
-- **launcher** — app launcher; text mode searches both modules and desktop applications
-- **notifications** — notification count via swaync; toggle DnD, clear all
-- **audio** — volume meter and mute state; volume up/down, mute toggle
-- **brightness** — brightness meter via brightnessctl; brighter/dimmer
-- **network** — WiFi signal/SSID/IP; badge shown when disconnected or signal low
-- **bluetooth** — connected device list; badge shown when devices connected
-- **session** — battery status, suspend, shutdown, reboot, logout; notifications on low battery
-- **profiles** — power profiles (power-saver, balanced, performance) via power-profiles-daemon
-- **system** — CPU/memory/temperature stats; alert badge when CPU > 90% or temp > 90C
-- **storage** — disk usage; alert badge when any disk > 80% full
-- **media** — MPRIS playback status; previous, play/pause, next
-- **weather** — temperature, humidity, conditions from wttr.in; alert badge in bad weather
-- **window** — active window title (dimmed, shown briefly after window switch)
-- **wallpaper** — wallpaper management via swww; shuffle and initialize
-- **keyboard** — keyboard layout indicator; cycle layouts via swaymsg
-- **clipboard** — clipboard history via cliphist/wl-clipboard; paste last, clear history
-- **mounts** — removable device status via udisks2
+| Module | Description | Dependencies |
+|--------|-------------|-------------|
+| calendar | Clock, weekly/monthly/yearly calendar navigation | — |
+| window | Active window title | — |
+| workspaces | Workspace indicators (hexagon toasts on switch) | — |
+| system | CPU, memory, temperature, uptime | — |
+| storage | Disk usage, alert when >80% full | — |
+| notifications | Notification count, dismiss, clear | libnotify |
+| outputs | Speaker volume & mute, device switching | wireplumber |
+| inputs | Microphone volume & mute, denoise toggle | wireplumber, rnnoise |
+| network | WiFi SSID/signal/IP, connect, scan | NetworkManager |
+| bluetooth | Paired devices, connect/disconnect, scan | bluez |
+| brightness | Screen brightness control | brightnessctl |
+| media | MPRIS now playing, play/pause/skip | playerctl |
+| session | Battery, suspend, shutdown, reboot, logout | upower |
+| profiles | Power profiles (saver/balanced/performance) | power-profiles-daemon |
+| weather | Temperature, humidity, conditions from wttr.in | curl |
+| snip | Region/screen screenshot, screen recording | grim, slurp, wl-clipboard, wl-screenrec |
+| wallpaper | Wallpaper cycling via swww | swww |
+| keyboard | Layout indicator, cycle layouts | swaymsg |
+| clipboard | Clipboard history, paste, clear | wl-clipboard, cliphist |
+| mounts | Removable device status | udisks2 |
 
 ### Todo
 
-- [ ] audio device management
 - [ ] monitor management
-- [ ] snip module for screengrabs
 - [ ] emoji module
 - [ ] lockscreen
 - [ ] greeter
@@ -63,12 +64,24 @@ Vision: all you need to work is Niri + Cyberdeck.
 
 ### Prerequisites
 
-- *NixOS* with flakes enabled
-- *Niri* although other Wayland compositors may work
+- A Wayland compositor (Niri officially supported, others may work)
+- Linux with systemd
 
-At this point only Niri is officially supported. Any other support would require other contributors.
+### Install (any distro)
 
-### Installation
+```sh
+curl -fsSL https://raw.githubusercontent.com/ixxie/cyberdeck/main/install.sh | sh
+```
+
+This installs the binary, Phosphor icons, a systemd service, and a default config. Then:
+
+```sh
+deck init            # create ~/.config/cyberdeck/config.toml (if not already present)
+# edit config.toml to enable modules, install their deps
+systemctl --user enable --now cyberdeck
+```
+
+### Install (NixOS)
 
 Add cyberdeck to your flake inputs:
 
@@ -79,7 +92,7 @@ Add cyberdeck to your flake inputs:
 }
 ```
 
-Import the NixOS module and enable the service:
+Import the NixOS module and enable modules:
 
 ```nix
 # configuration.nix
@@ -90,27 +103,32 @@ Import the NixOS module and enable the service:
     enable = true;
     settings = {
       font = "MonaspiceKr Nerd Font";
+      layout = "pills";
+      gap = 8;
     };
     mods = {
       calendar.enable = true;
       workspaces.enable = true;
+      window.enable = true;
       network.enable = true;
-      session.enable = true;
-      profiles.enable = true;
-      audio.enable = true;
+      outputs.enable = true;
+      inputs.enable = true;
       bluetooth.enable = true;
       brightness.enable = true;
+      session.enable = true;
       system.enable = true;
       notifications.enable = true;
       media.enable = true;
-      weather.enable = true;
+      weather = {
+        enable = true;
+        location = "London";
+      };
       storage.enable = true;
-      launcher.enable = true;
-      window.enable = true;
-      wallpaper.enable = true;
-      keyboard.enable = true;
-      clipboard.enable = true;
-      mounts.enable = true;
+      snip.enable = true;
+      wallpaper = {
+        enable = true;
+        dir = "~/Pictures/wallpapers";
+      };
     };
   };
 }
@@ -128,59 +146,46 @@ Add a toggle keybinding in your compositor config. For niri:
 
 ## Configuration
 
+For TOML config (non-NixOS), run `deck init` to generate a commented template at `~/.config/cyberdeck/config.toml`.
+
 ### Settings
 
-```nix
-services.cyberdeck.settings = {
-  font = "MonaspiceKr Nerd Font";  # any monospace font
-  font-size = 14;
-  padding = 6;                     # vertical padding
-  padding-horizontal = 12;         # horizontal padding (overrides padding for left/right)
-  padding-left = 12;               # left padding (overrides padding-horizontal)
-  padding-right = 8;               # right padding (overrides padding-horizontal)
-  icon-weight = "duotone";         # phosphor icon weight: regular, bold, light, thin, fill, duotone
-  position = "top";                # top or bottom
-  background = {
-    color = "#000000";
-    opacity = 0.4;
-  };
-  output-scales = {                # per-monitor scale multiplier
-    "DP-2" = 0.8;
-    "eDP-1" = 1.0;
-  };
-};
+```toml
+[settings]
+position = "top"              # top or bottom
+font = "monospace"            # any monospace font
+font-size = 14
+layout = "pills"              # classic, floating, pills, or transparent
+gap = 6                       # spacing between elements (px)
+scale = 1.0                   # global UI scale
+icon-weight = "light"         # regular, bold, thin, light, fill, or duotone
+
+[settings.theme]
+color = "#222222"
+opacity = 0.8
+radius = 6
+padding = 6
+
+[settings.theme.track]        # bar background overrides (omit for no track)
+# opacity = 1.0
+
+[settings.theme.pill]         # pill overrides
+# radius = 8
+
+[settings.monitors.DP-1]
+scale = 0.8
 ```
 
-### Bar layout
+### Layouts
 
-The bar config has two parts: `order` (display sequence) and `modules` (definitions):
+| Layout | Description |
+|--------|-------------|
+| classic | Solid bar attached to screen edge, no margin |
+| floating | Solid bar with margin, rounded corners |
+| pills | Transparent bar, solid floating pills (default) |
+| transparent | Everything transparent |
 
-```nix
-services.cyberdeck.extraConfig.bar = {
-  order = [
-    "notifications"
-    "media"
-    "system"
-    "storage"
-    "audio"
-    "brightness"
-    "bluetooth"
-    "weather"
-    "network"
-    "profiles"
-    "session"
-    "wallpaper"
-    "window"
-    "keyboard"
-    "clipboard"
-    "mounts"
-    "calendar"
-    "workspaces"
-  ];
-};
-```
-
-The root bar has three fixed sections: left (launcher icon + status badges), center (clock), and right (window title + workspaces). Badges only appear when their condition is met (e.g., audio shows when muted, network shows when signal is low).
+The `gap` parameter controls all visual spacing: margin, track padding, and inter-pill gaps.
 
 ### Modules
 
@@ -308,9 +313,12 @@ src/
 ### Building
 
 ```sh
+# NixOS
 nix build            # build the package
 nix develop          # dev shell with cargo, rust-analyzer
-cargo check          # type-check without building
+
+# Other distros (needs wayland, xkbcommon, fontconfig, freetype dev headers)
+cargo build --release
 ```
 
 ## License

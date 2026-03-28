@@ -212,13 +212,11 @@ fn dispatch(req: IpcRequest, app: &mut BarApp) -> IpcResponse {
         }
         IpcRequest::SetStyle { style } => {
             match style.as_str() {
-                "flat" => app.set_theme(crate::config::Theme::Flat),
-                "neumorphic" => app.set_theme(crate::config::Theme::Neumorphic),
-                "glass" => app.set_theme(crate::config::Theme::Glass),
-                "pills" => app.set_layout(Some(crate::config::Layout::Pills)),
-                "detached" => app.set_layout(Some(crate::config::Layout::Detached)),
-                "attached" => app.set_layout(Some(crate::config::Layout::Attached)),
-                _ => return IpcResponse::err(&format!("unknown style: {style}. use: flat, neumorphic, glass, pills, detached, attached")),
+                "classic" => app.set_layout(crate::config::Layout::Classic),
+                "floating" => app.set_layout(crate::config::Layout::Floating),
+                "pills" => app.set_layout(crate::config::Layout::Pills),
+                "transparent" => app.set_layout(crate::config::Layout::Transparent),
+                _ => return IpcResponse::err(&format!("unknown style: {style}. use: classic, floating, pills, transparent")),
             };
             state_response(app)
         }

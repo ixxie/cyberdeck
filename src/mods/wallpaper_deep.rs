@@ -37,21 +37,20 @@ impl WallpaperDeep {
 }
 
 impl InteractiveModule for WallpaperDeep {
-    fn render_center(&self, fg: Rgba, data: &serde_json::Value) -> Vec<Elem> {
+    fn render_center(&self, fg: Rgba, data: &serde_json::Value) -> Vec<Vec<Elem>> {
         let idle_fg = Rgba::new(fg.r, fg.g, fg.b, (fg.a as f32 * 0.44) as u8);
         let active_fg = Rgba::new(fg.r, fg.g, fg.b, (fg.a as f32 * 0.72) as u8);
 
         let groups = Self::group_names(data);
         if groups.is_empty() {
-            return vec![Elem::text("no groups").fg(idle_fg)];
+            return vec![vec![Elem::text("no groups").fg(idle_fg)]];
         }
 
         let current_group = data.get("group")
             .and_then(|v| v.as_str())
             .unwrap_or("");
 
-        let mut widgets = Vec::new();
-        for (i, name) in groups.iter().enumerate() {
+        groups.iter().enumerate().map(|(i, name)| {
             let is_active = (!current_group.is_empty() && name == current_group)
                 || (current_group.is_empty() && name == "All");
             let item_fg = if i == self.cursor {
@@ -61,11 +60,11 @@ impl InteractiveModule for WallpaperDeep {
             } else {
                 idle_fg
             };
-            widgets.push(Elem::text(name.clone()).fg(item_fg));
-        }
-
-        widgets
+            vec![Elem::text(name.clone()).fg(item_fg)]
+        }).collect()
     }
+
+    fn cursor(&self) -> Option<usize> { Some(self.cursor) }
 
     fn breadcrumb(&self) -> Vec<String> {
         vec!["Wallpaper".into()]

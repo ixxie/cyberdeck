@@ -1,10 +1,8 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::sync::Arc;
 
 use smithay_client_toolkit::reexports::calloop::RegistrationToken;
-use tiny_skia::Pixmap;
 
 use crate::bar::{NavState, Palette, Toast};
 use crate::color::Rgba;
@@ -21,18 +19,17 @@ pub(crate) enum TextItem {
 }
 
 pub(crate) struct PillCfg {
-    pub pad_x: f32,
-    pub pad_y: f32,
+    pub padding: f32,
     pub radius: f32,
 }
 
 fn pill(elems: Vec<Elem>, bg: Rgba, pc: &PillCfg) -> Span {
-    Span::new(elems).bg(bg).radius(pc.radius).pad(pc.pad_x, pc.pad_y)
+    Span::new(elems).bg(bg).radius(pc.radius).pad(pc.padding, pc.padding)
 }
 
 fn pill_bright(elems: Vec<Elem>, bg: Rgba, pc: &PillCfg) -> Span {
     let bright = Rgba::new(bg.r, bg.g, bg.b, (bg.a as f32 * 1.3).min(255.0) as u8);
-    Span::new(elems).bg(bright).radius(pc.radius).pad(pc.pad_x, pc.pad_y)
+    Span::new(elems).bg(bright).radius(pc.radius).pad(pc.padding, pc.padding)
 }
 
 /// Fixed pagination: fill a page from `scroll`, flip pages when cursor hits edge.
@@ -131,7 +128,7 @@ pub(crate) fn root_zones(
     toasts: &[Toast],
     gap: f32,
     bg: Rgba,
-    icon_h: u32,
+    _icon_h: u32,
     _bar_w: f32,
     _m: &Metrics,
     pc: &PillCfg,
@@ -154,59 +151,45 @@ pub(crate) fn root_zones(
         elems
     };
 
-    // Left: launcher icon
+    // Left: launcher + window title
     let mut left_spans = Vec::new();
     let launcher_icon = template_engine.render_icon("terminal");
-    left_spans.push(pill(vec![Elem::text(launcher_icon).fg(pal.selected)], bg, pc).path("launcher"));
+    let mut nav_elems = vec![Elem::text(launcher_icon).fg(pal.selected)];
+    nav_elems.extend(render_badges("window"));
+    left_spans.push(pill(nav_elems, bg, pc).path("launcher"));
 
-    // Center: minimap + window title in one pill
-    let mut center_elems = Vec::new();
-
-    if let Some(ws_data) = states_ref.get("workspaces").map(|s| &s.data) {
-        let workspaces = ws_data.get("workspaces").and_then(|v| v.as_array());
-        let windows = ws_data.get("windows").and_then(|v| v.as_array());
-        if let (Some(wss), Some(wins)) = (workspaces, windows) {
-            let output = output_name.unwrap_or("");
-            if let Some(pm) = render_minimap(wss, wins, output, icon_h) {
-                center_elems.push(Elem::text("").fg(pal.selected).icon(Arc::new(pm)));
-            }
-        }
-    }
-
-    center_elems.extend(render_badges("window"));
-
-    // Hide center when toasts are active to avoid overlap
-    let toast_presence: f32 = toasts.iter()
-        .map(|t| crate::bar::toast_opacity(t))
-        .fold(0.0f32, f32::max);
-
+    // Center: toasts
     let mut center_spans = Vec::new();
-    if !center_elems.is_empty() && toast_presence < 0.01 {
-        center_spans.push(pill(center_elems, bg, pc).path("overview"));
-    }
-
-    // Right: toasts + alert badges + clock
-    let mut right_spans = Vec::new();
-
     let toast_fg = Rgba::new(pal.active.r, pal.active.g, pal.active.b,
         (pal.active.a as f32 * 0.85) as u8);
     for t in toasts {
-        let text = if t.text.len() > 80 {
-            let mut s = t.text.chars().take(77).collect::<String>();
-            s.push_str("...");
-            s
-        } else {
-            t.text.clone()
-        };
-        let mut elem = Elem::text(text).fg(toast_fg);
-        if let Some(ref pm) = t.icon_pixmap {
-            elem = elem.icon(pm.clone());
-        }
         let opacity = crate::bar::toast_opacity(t);
-        right_spans.push(pill_bright(vec![elem], bg, pc).opacity(opacity));
+        if !t.elems.is_empty() {
+            // Structured toast (nav indicators): each elem is its own item in the pill
+            let elems = t.elems.clone();
+            center_spans.push(pill_bright(elems, bg, pc).opacity(opacity));
+        } else {
+            let text = if t.text.len() > 80 {
+                let mut s = t.text.chars().take(77).collect::<String>();
+                s.push_str("...");
+                s
+            } else {
+                t.text.clone()
+            };
+            let mut elem = Elem::text(text).fg(toast_fg);
+            if let Some(ref pm) = t.icon_pixmap {
+                elem = elem.icon(pm.clone());
+            }
+            center_spans.push(pill_bright(vec![elem], bg, pc).opacity(opacity));
+        }
     }
 
-    for id in &config.bar.order {
+    // Right: alert badges + clock
+    let mut right_spans = Vec::new();
+
+    let mut mod_ids: Vec<&String> = config.bar.modules.keys().collect();
+    mod_ids.sort();
+    for id in mod_ids {
         match id.as_str() {
             "calendar" | "window" | "workspaces" => continue,
             _ => {
@@ -258,8 +241,15 @@ pub(crate) fn mod_zones(
             .unwrap_or(serde_json::Value::Null);
         drop(states_ref);
 
-        let center_elems = deep.render_center(pal.selected, &data);
-        let center_span = pill(center_elems, bg, pc);
+        let items = deep.render_center(pal.selected, &data);
+        let cursor = deep.cursor();
+        let center_spans: Vec<Span> = items.into_iter().enumerate().map(|(i, elems)| {
+            if cursor == Some(i) {
+                pill_bright(elems, bg, pc)
+            } else {
+                pill(elems, bg, pc)
+            }
+        }).collect();
 
         let mut hints = Vec::new();
         for hint in deep.key_hints() {
@@ -275,7 +265,7 @@ pub(crate) fn mod_zones(
 
         return Some(vec![
             Zone::left(vec![pill(breadcrumb, bg, pc).path("__back")], gap),
-            Zone::center(vec![center_span], gap),
+            Zone::center(center_spans, gap),
             Zone::right(vec![pill(hints, bg, pc)], gap),
         ]);
     }
@@ -455,163 +445,50 @@ pub(crate) fn text_zones(
     ]
 }
 
-/// Render workspace minimap: stacked rows, each showing window tile layout
-/// Focused workspace is brighter, focused window is highlighted
-fn render_minimap(
+/// Workspace indicator: one Elem per workspace with hexagon icon
+pub fn ws_indicator_elems(
     workspaces: &[serde_json::Value],
-    windows: &[serde_json::Value],
-    output: &str,
-    icon_h: u32,
-) -> Option<Pixmap> {
-    if icon_h == 0 { return None; }
+    template_engine: &TemplateEngine,
+) -> Vec<Elem> {
+    let icon = template_engine.render_icon("hexagon");
+    let bright = Rgba::new(255, 255, 255, 200);
+    let dim = Rgba::new(255, 255, 255, 60);
 
-    // Filter workspaces for this output
-    let wss: Vec<&serde_json::Value> = workspaces.iter()
-        .filter(|ws| ws.get("output").and_then(|v| v.as_str()).unwrap_or("") == output)
-        .collect();
-    if wss.is_empty() { return None; }
-
-    let n = wss.len();
-    let ws_gap = (icon_h as f32 * 0.15).max(2.0).ceil() as u32;
-    let total_gap = (n.saturating_sub(1) as u32) * ws_gap;
-    let row_h = ((icon_h.saturating_sub(total_gap)) as f32 / n as f32).floor().max(2.0) as u32;
-    let map_w = (icon_h as f32 * 1.6).ceil() as u32;
-    let tile_gap = 2u32;
-
-    let total_h = row_h * n as u32 + total_gap;
-    let y_offset = (icon_h.saturating_sub(total_h)) / 2;
-
-    let mut pm = Pixmap::new(map_w, icon_h)?;
-    let mut y = y_offset;
-
-    for ws in &wss {
-        let ws_id = ws.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
-        let ws_focused = ws.get("focused").and_then(|v| v.as_bool()).unwrap_or(false);
-        let ws_active = ws.get("active").and_then(|v| v.as_bool()).unwrap_or(false);
-
-        let ws_wins: Vec<&serde_json::Value> = windows.iter()
-            .filter(|w| w.get("workspace_id").and_then(|v| v.as_i64()).unwrap_or(-1) == ws_id)
-            .collect();
-
-        let ws_alpha = if ws_focused { 200u8 } else if ws_active { 140u8 } else { 60u8 };
-
-        if ws_wins.is_empty() {
-            // Empty workspace: thin line spanning full width like populated ones
-            let line_x = 0u32;
-            let line_h = 1u32;
-            let line_y = y + (row_h.saturating_sub(line_h)) / 2;
-            fill_rounded_rect(pm.data_mut(), map_w, icon_h, line_x, line_y, map_w, line_h, 0.0, ws_alpha / 3);
-        } else {
-            let max_col = ws_wins.iter()
-                .map(|w| w.get("col").and_then(|v| v.as_i64()).unwrap_or(1))
-                .max()
-                .unwrap_or(1);
-
-            let mut col_widths: Vec<f64> = vec![0.0; max_col as usize];
-            for w in &ws_wins {
-                let col = (w.get("col").and_then(|v| v.as_i64()).unwrap_or(1) - 1) as usize;
-                let tw = w.get("w").and_then(|v| v.as_f64()).unwrap_or(400.0);
-                if col < col_widths.len() {
-                    col_widths[col] = col_widths[col].max(tw);
-                }
-            }
-            let total_w: f64 = col_widths.iter().sum();
-            if total_w <= 0.0 { y += row_h + ws_gap; continue; }
-
-            let usable_w = map_w.saturating_sub(tile_gap * (max_col as u32).saturating_sub(1));
-            let scale = usable_w as f64 / total_w;
-
-            let mut col_x = Vec::with_capacity(col_widths.len());
-            let mut cx = 0u32;
-            for (i, &cw) in col_widths.iter().enumerate() {
-                col_x.push(cx);
-                cx += (cw * scale).round() as u32;
-                if i < col_widths.len() - 1 {
-                    cx += tile_gap;
-                }
-            }
-
-            for col_idx in 0..max_col as usize {
-                let mut col_wins: Vec<&&serde_json::Value> = ws_wins.iter()
-                    .filter(|w| (w.get("col").and_then(|v| v.as_i64()).unwrap_or(1) - 1) as usize == col_idx)
-                    .collect();
-                col_wins.sort_by_key(|w| w.get("row").and_then(|v| v.as_i64()).unwrap_or(1));
-
-                let tile_w = (col_widths[col_idx] * scale).round() as u32;
-                let tx = col_x.get(col_idx).copied().unwrap_or(0);
-
-                let win_heights: Vec<f64> = col_wins.iter()
-                    .map(|w| w.get("h").and_then(|v| v.as_f64()).unwrap_or(300.0))
-                    .collect();
-                let total_h: f64 = win_heights.iter().sum();
-                let n_rows = col_wins.len();
-                let usable_h = row_h.saturating_sub(tile_gap * n_rows.saturating_sub(1) as u32);
-                let h_scale = if total_h > 0.0 { usable_h as f64 / total_h } else { 1.0 };
-
-                let mut ty = y;
-                for (ri, w) in col_wins.iter().enumerate() {
-                    let focused = w.get("focused").and_then(|v| v.as_bool()).unwrap_or(false);
-                    let tile_h = (win_heights[ri] * h_scale).round().max(1.0) as u32;
-                    if ri > 0 { ty += tile_gap; }
-                    let alpha = if focused { 255u8 } else { ws_alpha };
-                    let corner_r = (tile_h.min(tile_w) as f32 * 0.25).max(1.0);
-                    fill_rounded_rect(pm.data_mut(), map_w, icon_h, tx, ty, tile_w, tile_h, corner_r, alpha);
-                    ty += tile_h;
-                }
-            }
-        }
-
-        y += row_h + ws_gap;
-    }
-
-    Some(pm)
+    workspaces.iter().map(|ws| {
+        let focused = ws.get("focused").and_then(|v| v.as_bool()).unwrap_or(false);
+        Elem::text(icon.clone()).fg(if focused { bright } else { dim })
+    }).collect()
 }
 
-fn fill_rounded_rect(data: &mut [u8], buf_w: u32, buf_h: u32, x: u32, y: u32, w: u32, h: u32, r: f32, alpha: u8) {
-    let r = r.min(w as f32 / 2.0).min(h as f32 / 2.0);
-    for py in y..y + h {
-        if py >= buf_h { break; }
-        for px in x..x + w {
-            if px >= buf_w { break; }
-            let lx = px - x;
-            let ly = py - y;
+/// Window indicator: one Elem per window with app-window icon
+pub fn win_indicator_elems(
+    workspaces: &[serde_json::Value],
+    windows: &[serde_json::Value],
+    template_engine: &TemplateEngine,
+) -> Vec<Elem> {
+    let focused_ws = workspaces.iter().find(|ws| {
+        ws.get("focused").and_then(|v| v.as_bool()).unwrap_or(false)
+    });
+    let Some(ws) = focused_ws else { return Vec::new() };
+    let ws_id = ws.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
 
-            // Check corners
-            let in_corner = if lx < r as u32 && ly < r as u32 {
-                // top-left
-                let dx = r - lx as f32 - 0.5;
-                let dy = r - ly as f32 - 0.5;
-                dx * dx + dy * dy > r * r
-            } else if lx >= w - r as u32 && ly < r as u32 {
-                // top-right
-                let dx = lx as f32 + 0.5 - (w as f32 - r);
-                let dy = r - ly as f32 - 0.5;
-                dx * dx + dy * dy > r * r
-            } else if lx < r as u32 && ly >= h - r as u32 {
-                // bottom-left
-                let dx = r - lx as f32 - 0.5;
-                let dy = ly as f32 + 0.5 - (h as f32 - r);
-                dx * dx + dy * dy > r * r
-            } else if lx >= w - r as u32 && ly >= h - r as u32 {
-                // bottom-right
-                let dx = lx as f32 + 0.5 - (w as f32 - r);
-                let dy = ly as f32 + 0.5 - (h as f32 - r);
-                dx * dx + dy * dy > r * r
-            } else {
-                false
-            };
+    let mut ws_wins: Vec<&serde_json::Value> = windows.iter()
+        .filter(|w| w.get("workspace_id").and_then(|v| v.as_i64()).unwrap_or(-1) == ws_id)
+        .collect();
+    ws_wins.sort_by_key(|w| {
+        let col = w.get("col").and_then(|v| v.as_i64()).unwrap_or(0);
+        let row = w.get("row").and_then(|v| v.as_i64()).unwrap_or(0);
+        (col, row)
+    });
 
-            if in_corner { continue; }
+    let icon = template_engine.render_icon("app-window");
+    let bright = Rgba::new(255, 255, 255, 200);
+    let dim = Rgba::new(255, 255, 255, 60);
 
-            let idx = (py * buf_w + px) as usize * 4;
-            if idx + 3 < data.len() {
-                data[idx] = 255;
-                data[idx + 1] = 255;
-                data[idx + 2] = 255;
-                data[idx + 3] = alpha;
-            }
-        }
-    }
+    ws_wins.iter().map(|w| {
+        let focused = w.get("focused").and_then(|v| v.as_bool()).unwrap_or(false);
+        Elem::text(icon.clone()).fg(if focused { bright } else { dim })
+    }).collect()
 }
 
 pub(crate) fn text_matched_items(

@@ -28,14 +28,13 @@ let
     acc // (mod.env or {})
   ) {} enabledModules;
 
-  # Collect module param overrides for the sparse JSON config
-  moduleOverrides = lib.filterAttrs (_: v: v != {}) (
-    lib.mapAttrs (_name: mod:
-      removeAttrs mod [ "enable" "deps" "services" ]
-    ) enabledModules
-  );
+  # Collect module overrides for the sparse JSON config
+  # Always include enabled modules (even with empty overrides) so the
+  # Rust side knows which modules to show
+  moduleOverrides = lib.mapAttrs (_name: mod:
+    removeAttrs mod [ "enable" "deps" "services" "env" ]
+  ) enabledModules;
 
-  # Sparse config: settings + order + only module overrides (params, etc.)
   finalConfig = {
     settings = defaults.settings // (cfg.settings or {}) // {
       icons-dir = "${phosphor-icons}/assets";
@@ -86,6 +85,7 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    fonts.packages = [ pkgs.noto-fonts-monochrome-emoji ];
     environment.systemPackages = [ cyberdeckPkg ];
 
     systemd.user.services = (lib.mapAttrs (_name: svc:

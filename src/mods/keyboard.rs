@@ -35,13 +35,13 @@ impl KeyboardDeep {
 }
 
 impl InteractiveModule for KeyboardDeep {
-    fn render_center(&self, fg: Rgba, data: &Value) -> Vec<Elem> {
+    fn render_center(&self, fg: Rgba, data: &Value) -> Vec<Vec<Elem>> {
         let active_fg = Rgba::new(fg.r, fg.g, fg.b, (fg.a as f32 * 0.72) as u8);
         let idle_fg = Rgba::new(fg.r, fg.g, fg.b, (fg.a as f32 * 0.44) as u8);
 
         let layouts = Self::layouts(data);
         if layouts.is_empty() {
-            return vec![Elem::text("no layouts").fg(idle_fg)];
+            return vec![vec![Elem::text("no layouts").fg(idle_fg)]];
         }
 
         let active = Self::active_idx(data);
@@ -54,9 +54,11 @@ impl InteractiveModule for KeyboardDeep {
                 idle_fg
             };
             let prefix = if i == active { "●" } else { "○" };
-            Elem::text(format!("{prefix} {name}")).fg(item_fg)
+            vec![Elem::text(format!("{prefix} {name}")).fg(item_fg)]
         }).collect()
     }
+
+    fn cursor(&self) -> Option<usize> { Some(self.cursor) }
 
     fn breadcrumb(&self) -> Vec<String> {
         vec!["Keyboard".into()]

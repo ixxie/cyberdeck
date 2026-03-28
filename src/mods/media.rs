@@ -54,7 +54,7 @@ impl MediaDeep {
 }
 
 impl InteractiveModule for MediaDeep {
-    fn render_center(&self, fg: Rgba, data: &Value) -> Vec<Elem> {
+    fn render_center(&self, fg: Rgba, data: &Value) -> Vec<Vec<Elem>> {
         let idle_fg = Rgba::new(fg.r, fg.g, fg.b, (fg.a as f32 * 0.44) as u8);
 
         let title = data.get("title").and_then(|v| v.as_str()).unwrap_or("");
@@ -62,7 +62,7 @@ impl InteractiveModule for MediaDeep {
         let status = data.get("status").and_then(|v| v.as_str()).unwrap_or("Stopped");
 
         if title.is_empty() {
-            return vec![Elem::text("no media").fg(idle_fg)];
+            return vec![vec![Elem::text("no media").fg(idle_fg)]];
         }
 
         let icon = if status == "Playing" { "▶" } else { "⏸" };
@@ -72,7 +72,7 @@ impl InteractiveModule for MediaDeep {
             format!("{icon} {title}")
         };
 
-        vec![Elem::text(label).fg(fg)]
+        vec![vec![Elem::text(label).fg(fg)]]
     }
 
     fn breadcrumb(&self) -> Vec<String> {

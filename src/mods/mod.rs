@@ -9,6 +9,7 @@ mod launcher;
 mod network;
 mod notifications;
 mod session;
+mod snip;
 mod storage;
 mod system;
 mod calendar;
@@ -71,6 +72,7 @@ pub fn register<D: 'static>(
         "window" => window::poll,
         "workspaces" => workspaces::poll,
         "wallpaper" => wallpaper::poll,
+        "snip" => snip::poll,
         other => {
             log::error!("unknown native source kind: {other}");
             return None;
@@ -119,7 +121,9 @@ pub enum KeyResult {
 }
 
 pub trait InteractiveModule {
-    fn render_center(&self, fg: Rgba, data: &serde_json::Value) -> Vec<Elem>;
+    /// Each inner Vec<Elem> becomes a separate pill in the center zone.
+    fn render_center(&self, fg: Rgba, data: &serde_json::Value) -> Vec<Vec<Elem>>;
+    fn cursor(&self) -> Option<usize> { None }
     fn breadcrumb(&self) -> Vec<String>;
     fn key_hints(&self) -> Vec<KeyHintDef>;
     fn handle_key(&mut self, event: &KeyEvent, data: &serde_json::Value) -> KeyResult;
@@ -141,6 +145,7 @@ pub fn create_interactive(
         "keyboard" => Some(Box::new(keyboard::KeyboardDeep::new())),
         "network" => Some(Box::new(network::NetworkDeep::new())),
         "wallpaper" => Some(Box::new(wallpaper_deep::WallpaperDeep::new())),
+        "snip" => Some(Box::new(snip::SnipDeep::new())),
         "actions" => Some(Box::new(actions::ActionPalette::new(
             &module.name,
             module.key_hints.clone(),

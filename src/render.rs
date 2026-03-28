@@ -10,21 +10,15 @@ use unicode_width::UnicodeWidthChar;
 use crate::layout::Frame;
 use crate::icons::IconSet;
 
-use crate::config::Theme;
-
 pub struct Renderer {
     pub font_system: FontSystem,
     pub swash_cache: SwashCache,
     pub cell_w: f32,
     pub cell_h: f32,
-    pub track_pad_x: f32,
-    pub track_pad_y: f32,
-    pub pill_pad_y: f32,
-    pub theme: Theme,
-    pub pill_opacity: f32,
     pub font_size: f32,
     pub font_family: String,
-    shaped_cache: HashMap<(String, i32), Buffer>,
+    pub emoji_font: String,
+    shaped_cache: HashMap<(String, i32, bool), Buffer>,
 }
 
 impl Renderer {
@@ -32,7 +26,6 @@ impl Renderer {
         let mut font_system = FontSystem::new();
         let swash_cache = SwashCache::new();
 
-        // Measure cell dimensions by shaping 'M'
         let metrics = Metrics::new(font_size, font_size * 1.2);
         let mut buf = Buffer::new(&mut font_system, metrics);
         {
@@ -51,26 +44,24 @@ impl Renderer {
             .unwrap_or(font_size * 0.6);
         let cell_h = font_size * 1.2;
 
-        log::info!("renderer: font={font_family} size={font_size} cell={cell_w}x{cell_h}");
+        log::info!("renderer: font={font_family} emoji={} size={font_size} cell={cell_w}x{cell_h}", settings.emoji_font);
 
         Self {
             font_system,
             swash_cache,
             cell_w,
             cell_h,
-            track_pad_x: settings.track_pad_x(),
-            track_pad_y: settings.track_pad_y(),
-            pill_pad_y: settings.pill_pad_y(),
-            theme: settings.theme,
-            pill_opacity: settings.pill_opacity,
             font_size,
             font_family: font_family.to_string(),
+            emoji_font: settings.emoji_font.clone(),
             shaped_cache: HashMap::new(),
         }
     }
 
-    pub fn bar_height(&self) -> u32 {
-        (self.cell_h + 2.0 * self.pill_pad_y + 2.0 * self.track_pad_y).ceil() as u32
+    pub fn bar_height(&self, settings: &crate::config::Settings) -> u32 {
+        let track = settings.resolve_track();
+        let pill = settings.resolve_pill();
+        (self.cell_h + 2.0 * pill.padding + 2.0 * track.padding).ceil() as u32
     }
 
     pub fn render_frame(
@@ -98,12 +89,10 @@ impl Renderer {
         let mul = output_mul;
         let cell_w = self.cell_w * sf * mul;
         let cell_h = self.cell_h * sf * mul;
-        let track_pad = self.track_pad_x * sf * mul;
         let font_size = self.font_size * sf * mul;
 
-        // Render each span
         for fspan in &frame.spans {
-            let span_x = track_pad + fspan.rect.x * sf;
+            let span_x = fspan.rect.x * sf;
             let span_y = fspan.rect.y * sf;
             let span_w = fspan.rect.w * sf;
             let span_h = fspan.rect.h * sf;
@@ -120,111 +109,6 @@ impl Renderer {
                         paint.set_color_rgba8(sbg.r, sbg.g, sbg.b, bg_a);
                         paint.anti_alias = true;
                         pixmap.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
-
-                        // Neumorphic: soft offset shadows for raised pill
-                        if matches!(self.theme, Theme::Neumorphic) {
-                            let spread = (6.0 * sf).ceil() as i32;
-                            let offset = (2.0 * sf).ceil() as i32;
-
-                            // Dark shadow: offset down-right, soft spread
-                            if let Some(shadow_path) = rounded_rect_path(
-                                span_x + offset as f32, span_y + offset as f32,
-                                span_w, span_h, radius,
-                            ) {
-                                for d in 1..=spread {
-                                    let t = 1.0 - d as f32 / (spread + 1) as f32;
-                                    let a = (0.25 * t * t * span_opacity * 255.0) as u8;
-                                    if a == 0 { continue; }
-                                    if let Some(p) = rounded_rect_path(
-                                        span_x + (offset + d) as f32 * 0.5,
-                                        span_y + (offset + d) as f32 * 0.5,
-                                        span_w + d as f32 * 0.3,
-                                        span_h + d as f32 * 0.3,
-                                        radius + d as f32 * 0.2,
-                                    ) {
-                                        let mut sp = Paint::default();
-                                        sp.set_color_rgba8(0, 0, 0, a);
-                                        sp.anti_alias = true;
-                                        let stroke = tiny_skia::Stroke { width: 1.5, ..Default::default() };
-                                        pixmap.stroke_path(&p, &sp, &stroke, Transform::identity(), None);
-                                    }
-                                }
-                            }
-
-                            // Light highlight: offset up-left, soft spread
-                            for d in 1..=spread {
-                                let t = 1.0 - d as f32 / (spread + 1) as f32;
-                                let a = (0.2 * t * t * span_opacity * 255.0) as u8;
-                                if a == 0 { continue; }
-                                if let Some(p) = rounded_rect_path(
-                                    span_x - (offset + d) as f32 * 0.5,
-                                    span_y - (offset + d) as f32 * 0.5,
-                                    span_w + d as f32 * 0.3,
-                                    span_h + d as f32 * 0.3,
-                                    radius + d as f32 * 0.2,
-                                ) {
-                                    let mut sp = Paint::default();
-                                    sp.set_color_rgba8(255, 255, 255, a);
-                                    sp.anti_alias = true;
-                                    let stroke = tiny_skia::Stroke { width: 1.5, ..Default::default() };
-                                    pixmap.stroke_path(&p, &sp, &stroke, Transform::identity(), None);
-                                }
-                            }
-
-                            // Redraw pill on top to cover shadow overlap
-                            let mut paint = Paint::default();
-                            paint.set_color_rgba8(sbg.r, sbg.g, sbg.b, bg_a);
-                            paint.anti_alias = true;
-                            pixmap.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
-                        }
-
-                        // Glass: specular highlight, inner shadow, edge glow
-                        if matches!(self.theme, Theme::Glass) {
-                            let ix0 = span_x as i32;
-                            let ix1 = (span_x + span_w) as i32;
-                            let iy0 = span_y as i32;
-                            let iy1 = (span_y + span_h) as i32;
-
-                            // Edge glow: 1px bright border around pill
-                            if let Some(border) = rounded_rect_path(
-                                span_x + 0.5, span_y + 0.5,
-                                span_w - 1.0, span_h - 1.0,
-                                (radius - 0.5).max(0.0),
-                            ) {
-                                let mut edge_paint = Paint::default();
-                                let edge_a = (0.2 * 255.0 * span_opacity) as u8;
-                                edge_paint.set_color_rgba8(255, 255, 255, edge_a);
-                                edge_paint.anti_alias = true;
-                                let stroke = tiny_skia::Stroke {
-                                    width: 1.0,
-                                    ..Default::default()
-                                };
-                                pixmap.stroke_path(&border, &edge_paint, &stroke, Transform::identity(), None);
-                            }
-
-                            // Specular highlight: bright gradient at top (20% of pill height)
-                            let hi_h = ((span_h * 0.2).ceil() as i32).max(2);
-                            let r_inset = (radius * 0.4) as i32;
-                            for dy in 0..hi_h {
-                                let t = 1.0 - (dy as f32 / hi_h as f32);
-                                let a = 0.3 * t * t * span_opacity;
-                                let py = iy0 + 1 + dy;
-                                for px in (ix0 + r_inset)..(ix1 - r_inset) {
-                                    Self::blend_pixel(pixmap.data_mut(), w, h, px, py, 255.0, 255.0, 255.0, a);
-                                }
-                            }
-
-                            // Inner shadow at bottom (depth separation)
-                            let sh_h = ((span_h * 0.15).ceil() as i32).max(2);
-                            for dy in 0..sh_h {
-                                let t = 1.0 - (dy as f32 / sh_h as f32);
-                                let a = 0.12 * t * span_opacity;
-                                let py = iy1 - 2 - dy;
-                                for px in (ix0 + r_inset)..(ix1 - r_inset) {
-                                    Self::blend_pixel(pixmap.data_mut(), w, h, px, py, 0.0, 0.0, 0.0, a);
-                                }
-                            }
-                        }
                     }
                 }
             }
@@ -234,12 +118,10 @@ impl Renderer {
             // Text y centered within span
             let text_y = span_y + (span_h - cell_h) / 2.0;
 
-            // Render each element within the span
             for felem in &fspan.elems {
-                let elem_x = track_pad + felem.rect.x * sf;
+                let elem_x = felem.rect.x * sf;
                 let elem_y = text_y;
 
-                // Apply span opacity to element fg
                 let mut fg = felem.fg;
                 fg.a = (fg.a as f32 * span_opacity) as u8;
                 if fg.a == 0 { continue; }
@@ -253,7 +135,7 @@ impl Renderer {
                     let dy = elem_y + (cell_h - icon_h) / 2.0;
                     Self::composite_icon_at(
                         pixmap.data_mut(), w, h,
-                        icon_pm, cx as i32, dy as i32, fg,
+                        icon_pm, cx.round() as i32, dy.round() as i32, fg,
                     );
                     cx += icon_w + cell_w * 0.5;
                 }
@@ -263,6 +145,7 @@ impl Renderer {
                 let mut text_run = String::new();
                 let mut text_run_start = cx;
                 let mut text_fg = fg;
+                let mut run_is_emoji = false;
 
                 for ch in felem.text.chars() {
                     if ch == '\x01' { dim = true; continue; }
@@ -274,7 +157,7 @@ impl Renderer {
                     }
 
                     if IconSet::is_icon_char(ch) {
-                        let run_w = self.draw_text_run(pixmap, &text_run, text_run_start, elem_y, font_size, cell_h, text_fg);
+                        let run_w = self.draw_text_run(pixmap, &text_run, text_run_start, elem_y, font_size, cell_h, text_fg, run_is_emoji);
                         cx = text_run_start + run_w;
                         text_run.clear();
 
@@ -284,7 +167,7 @@ impl Renderer {
                             let dy = elem_y + (cell_h - icon_h) / 2.0;
                             Self::composite_icon_at(
                                 pixmap.data_mut(), w, h,
-                                icon_pm, cx as i32, dy as i32, char_fg,
+                                icon_pm, cx.round() as i32, dy.round() as i32, char_fg,
                             );
                             cx += icon_w;
                         } else {
@@ -292,42 +175,58 @@ impl Renderer {
                         }
                         text_run_start = cx;
                         text_fg = char_fg;
+                        run_is_emoji = false;
                     } else {
+                        let ch_emoji = is_emoji(ch);
+                        let needs_flush = if text_run.is_empty() {
+                            false
+                        } else if char_fg != text_fg || ch_emoji != run_is_emoji {
+                            true
+                        } else {
+                            false
+                        };
+
+                        if needs_flush {
+                            let run_w = self.draw_text_run(pixmap, &text_run, text_run_start, elem_y, font_size, cell_h, text_fg, run_is_emoji);
+                            cx = text_run_start + run_w;
+                            text_run.clear();
+                        }
+
                         if text_run.is_empty() {
                             text_run_start = cx;
                             text_fg = char_fg;
-                        } else if char_fg != text_fg {
-                            let run_w = self.draw_text_run(pixmap, &text_run, text_run_start, elem_y, font_size, cell_h, text_fg);
-                            cx = text_run_start + run_w;
-                            text_run.clear();
-                            text_run_start = cx;
-                            text_fg = char_fg;
+                            run_is_emoji = ch_emoji;
                         }
                         text_run.push(ch);
                         cx += cell_w * ch.width().unwrap_or(1) as f32;
                     }
                 }
                 // Flush remaining text
-                self.draw_text_run(pixmap, &text_run, text_run_start, elem_y, font_size, cell_h, text_fg);
+                self.draw_text_run(pixmap, &text_run, text_run_start, elem_y, font_size, cell_h, text_fg, run_is_emoji);
             }
         }
     }
 
     fn draw_text_run(
         &mut self, pixmap: &mut Pixmap, text: &str, x: f32, y: f32,
-        font_size: f32, cell_h: f32, fg: crate::color::Rgba,
+        font_size: f32, cell_h: f32, fg: crate::color::Rgba, emoji: bool,
     ) -> f32 {
         if text.is_empty() { return 0.0; }
 
         let scale = (font_size * 100.0) as i32;
-        let buf = self.shaped_cache.entry((text.to_string(), scale)).or_insert_with(|| {
+        let buf = self.shaped_cache.entry((text.to_string(), scale, emoji)).or_insert_with(|| {
             let metrics = Metrics::new(font_size, cell_h);
             let mut buf = Buffer::new(&mut self.font_system, metrics);
+            let family = if emoji {
+                Family::Name(&self.emoji_font)
+            } else {
+                Family::Name(&self.font_family)
+            };
             {
                 let mut borrowed = buf.borrow_with(&mut self.font_system);
                 borrowed.set_text(
                     &text,
-                    Attrs::new().family(Family::Name(&self.font_family)),
+                    Attrs::new().family(family),
                     Shaping::Advanced,
                 );
                 borrowed.shape_until_scroll(true);
@@ -443,13 +342,43 @@ impl Renderer {
     }
 }
 
+fn is_emoji(ch: char) -> bool {
+    let c = ch as u32;
+    matches!(c,
+        0x200D |              // ZWJ
+        0x203C | 0x2049 |    // ‼ ⁉
+        0x20E3 |              // Combining enclosing keycap
+        0x2122 | 0x2139 |    // ™ ℹ
+        0x2194..=0x2199 |    // Arrows
+        0x21A9..=0x21AA |    // ↩ ↪
+        0x231A..=0x231B |    // ⌚ ⌛
+        0x2328 |              // ⌨
+        0x23CF |              // ⏏
+        0x23E9..=0x23FA |    // ⏩..⏺
+        0x24C2 |              // Ⓜ
+        0x25AA..=0x25AB |    // ▪ ▫
+        0x25B6 | 0x25C0 |    // ▶ ◀
+        0x25FB..=0x25FE |    // ◻..◾
+        0x2600..=0x27BF |    // Misc Symbols & Dingbats
+        0x2934..=0x2935 |    // ⤴ ⤵
+        0x2B05..=0x2B07 |    // ⬅..⬇
+        0x2B1B..=0x2B1C |    // ⬛ ⬜
+        0x2B50..=0x2B55 |    // ⭐ ⭕
+        0x3030 | 0x303D |    // 〰 〽
+        0x3297 | 0x3299 |    // ㊗ ㊙
+        0xFE00..=0xFE0F |    // Variation selectors
+        0x1F000..=0x1FAFF |  // All SMP emoji blocks
+        0x1FC00..=0x1FCFF |  // Symbols for Legacy Computing (some emoji)
+        0xE0020..=0xE007F    // Tag characters (flag sequences)
+    )
+}
+
 fn rounded_rect_path(x: f32, y: f32, w: f32, h: f32, r: f32) -> Option<tiny_skia::Path> {
     if w <= 0.0 || h <= 0.0 {
         return None;
     }
     let r = r.min(w / 2.0).min(h / 2.0);
     if r <= 0.0 {
-        // Simple rect
         let mut pb = PathBuilder::new();
         pb.move_to(x, y);
         pb.line_to(x + w, y);
@@ -459,28 +388,18 @@ fn rounded_rect_path(x: f32, y: f32, w: f32, h: f32, r: f32) -> Option<tiny_skia
         return pb.finish();
     }
 
-    // Kappa for circular arcs approximated with cubic beziers
     let k = 0.5522847498;
     let kr = k * r;
 
     let mut pb = PathBuilder::new();
-    // Start at top-left after the corner radius
     pb.move_to(x + r, y);
-    // Top edge
     pb.line_to(x + w - r, y);
-    // Top-right corner
     pb.cubic_to(x + w - r + kr, y, x + w, y + r - kr, x + w, y + r);
-    // Right edge
     pb.line_to(x + w, y + h - r);
-    // Bottom-right corner
     pb.cubic_to(x + w, y + h - r + kr, x + w - r + kr, y + h, x + w - r, y + h);
-    // Bottom edge
     pb.line_to(x + r, y + h);
-    // Bottom-left corner
     pb.cubic_to(x + r - kr, y + h, x, y + h - r + kr, x, y + h - r);
-    // Left edge
     pb.line_to(x, y + r);
-    // Top-left corner
     pb.cubic_to(x, y + r - kr, x + r - kr, y, x + r, y);
     pb.close();
     pb.finish()

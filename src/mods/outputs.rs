@@ -82,7 +82,7 @@ impl OutputsDeep {
 }
 
 impl InteractiveModule for OutputsDeep {
-    fn render_center(&self, fg: Rgba, data: &Value) -> Vec<Elem> {
+    fn render_center(&self, fg: Rgba, data: &Value) -> Vec<Vec<Elem>> {
         let active_fg = Rgba::new(fg.r, fg.g, fg.b, (fg.a as f32 * 0.72) as u8);
         let idle_fg = Rgba::new(fg.r, fg.g, fg.b, (fg.a as f32 * 0.44) as u8);
 
@@ -93,12 +93,12 @@ impl InteractiveModule for OutputsDeep {
 
         let outputs = self.outputs(data);
         if outputs.map(|o| o.is_empty()).unwrap_or(true) {
-            return vec![Elem::text("no outputs").fg(idle_fg)];
+            return vec![vec![Elem::text("no outputs").fg(idle_fg)]];
         }
 
-        vec![
+        vec![vec![
             Elem::text(format!("● {sink} {vol_str}")).fg(active_fg),
-        ]
+        ]]
     }
 
     fn breadcrumb(&self) -> Vec<String> {

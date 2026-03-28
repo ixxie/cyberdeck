@@ -212,20 +212,20 @@ impl InputsDeep {
 }
 
 impl InteractiveModule for InputsDeep {
-    fn render_center(&self, fg: Rgba, data: &Value) -> Vec<Elem> {
+    fn render_center(&self, fg: Rgba, data: &Value) -> Vec<Vec<Elem>> {
         let active_fg = Rgba::new(fg.r, fg.g, fg.b, (fg.a as f32 * 0.72) as u8);
         let idle_fg = Rgba::new(fg.r, fg.g, fg.b, (fg.a as f32 * 0.44) as u8);
 
         let devices = match self.devices(data) {
             Some(d) if !d.is_empty() => d,
-            _ => return vec![Elem::text("no inputs").fg(idle_fg)],
+            _ => return vec![vec![Elem::text("no inputs").fg(idle_fg)]],
         };
 
-        let mut widgets = Vec::new();
+        let mut items = Vec::new();
 
         let denoise = data.get("denoise").and_then(|v| v.as_bool()).unwrap_or(false);
         if denoise {
-            widgets.push(Elem::text("◆ denoise").fg(active_fg));
+            items.push(vec![Elem::text("◆ denoise").fg(active_fg)]);
         }
 
         for (i, dev) in devices.iter().enumerate() {
@@ -244,13 +244,15 @@ impl InteractiveModule for InputsDeep {
 
             let prefix = if is_default { "●" } else { "○" };
             let vol_str = if muted { "muted".to_string() } else { format!("{vol}%") };
-            widgets.push(
+            items.push(vec![
                 Elem::text(format!("{prefix} {name} {vol_str}")).fg(dev_fg),
-            );
+            ]);
         }
 
-        widgets
+        items
     }
+
+    fn cursor(&self) -> Option<usize> { Some(self.cursor) }
 
     fn breadcrumb(&self) -> Vec<String> {
         vec![]

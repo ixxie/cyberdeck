@@ -4,13 +4,75 @@ use std::path::PathBuf;
 
 use crate::color::Rgba;
 
-#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum Layout { Pills, Detached, Attached }
+// --- Layout & Theme ---
 
 #[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Default)]
 #[serde(rename_all = "lowercase")]
-pub enum Theme { #[default] Flat, Neumorphic, Glass }
+pub enum Layout {
+    Classic,
+    Floating,
+    #[default]
+    Pills,
+    Transparent,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct ThemeOverride {
+    pub color: Option<Rgba>,
+    pub opacity: Option<f32>,
+    pub radius: Option<f32>,
+    pub padding: Option<f32>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ThemeCfg {
+    #[serde(default = "default_color")]
+    pub color: Rgba,
+    #[serde(default = "default_opacity")]
+    pub opacity: f32,
+    #[serde(default = "default_radius")]
+    pub radius: f32,
+    #[serde(default = "default_padding")]
+    pub padding: f32,
+    #[serde(default)]
+    pub track: Option<ThemeOverride>,
+    #[serde(default)]
+    pub pill: Option<ThemeOverride>,
+}
+
+impl Default for ThemeCfg {
+    fn default() -> Self {
+        Self {
+            color: default_color(),
+            opacity: default_opacity(),
+            radius: default_radius(),
+            padding: default_padding(),
+            track: None,
+            pill: None,
+        }
+    }
+}
+
+pub struct ResolvedTrack {
+    pub color: Rgba,
+    pub opacity: f32,
+    pub radius: f32,
+    pub padding: f32,
+}
+
+pub struct ResolvedPill {
+    pub color: Rgba,
+    pub opacity: f32,
+    pub radius: f32,
+    pub padding: f32,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct MonitorCfg {
+    pub scale: Option<f32>,
+}
+
+// --- Top-level config ---
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
@@ -25,85 +87,65 @@ pub struct Settings {
     pub position: Position,
     #[serde(default = "default_font")]
     pub font: String,
+    #[serde(default = "default_emoji_font")]
+    pub emoji_font: String,
     #[serde(default = "default_font_size")]
     pub font_size: f32,
     #[serde(default)]
-    pub theme: Theme,
+    pub layout: Layout,
+    #[serde(default = "default_gap")]
+    pub gap: f32,
+    #[serde(default = "default_scale")]
+    pub scale: f32,
     #[serde(default)]
-    pub layout: Option<Layout>,
-    #[serde(default)]
-    pub margin: u32,
-    #[serde(default)]
-    pub margin_x: Option<f32>,
-    #[serde(default)]
-    pub margin_y: Option<f32>,
-    #[serde(default)]
-    pub track_padding: f32,
-    #[serde(default)]
-    pub track_padding_x: Option<f32>,
-    #[serde(default)]
-    pub track_padding_y: Option<f32>,
-    #[serde(default = "default_pill_padding")]
-    pub pill_padding: f32,
-    #[serde(default)]
-    pub pill_padding_x: Option<f32>,
-    #[serde(default)]
-    pub pill_padding_y: Option<f32>,
-    #[serde(default = "default_pill_radius")]
-    pub pill_radius: f32,
-    #[serde(default = "default_pill_opacity")]
-    pub pill_opacity: f32,
-    #[serde(default)]
-    pub background: Background,
+    pub theme: ThemeCfg,
     pub icons_dir: Option<String>,
     #[serde(default = "default_icon_weight")]
     pub icon_weight: String,
     #[serde(default)]
-    pub output_scales: HashMap<String, f32>,
+    pub monitors: HashMap<String, MonitorCfg>,
 }
 
 impl Settings {
-    pub fn effective_layout(&self) -> Layout {
-        self.layout.unwrap_or(match self.theme {
-            Theme::Flat => Layout::Pills,
-            Theme::Neumorphic => Layout::Attached,
-            Theme::Glass => Layout::Detached,
-        })
-    }
-    pub fn has_track(&self) -> bool { !matches!(self.effective_layout(), Layout::Pills) }
-    pub fn margin_x(&self) -> f32 {
-        if matches!(self.effective_layout(), Layout::Attached) { return 0.0; }
-        self.margin_x.unwrap_or(self.margin as f32)
-    }
-    pub fn margin_y(&self) -> f32 {
-        if matches!(self.effective_layout(), Layout::Attached) { return 0.0; }
-        self.margin_y.unwrap_or(self.margin as f32)
-    }
-    pub fn track_pad_x(&self) -> f32 {
-        if !self.has_track() { return 0.0; }
-        let base = self.track_padding_x.unwrap_or(self.track_padding);
-        match self.theme {
-            Theme::Neumorphic => base.max(8.0),
-            _ => base,
+    pub fn margin(&self) -> f32 {
+        match self.layout {
+            Layout::Classic => 0.0,
+            _ => self.gap,
         }
     }
-    pub fn track_pad_y(&self) -> f32 {
-        if !self.has_track() { return 0.0; }
-        let base = self.track_padding_y.unwrap_or(self.track_padding);
-        match self.theme {
-            Theme::Neumorphic => base.max(8.0),
-            _ => base,
+
+    pub fn monitor_scale(&self, name: Option<&str>) -> f32 {
+        name.and_then(|n| self.monitors.get(n))
+            .and_then(|m| m.scale)
+            .unwrap_or(self.scale)
+    }
+
+    pub fn resolve_track(&self) -> ResolvedTrack {
+        let ov = self.theme.track.as_ref();
+        let (opacity, padding, radius) = match self.layout {
+            Layout::Classic => (1.0, self.gap, 0.0),
+            Layout::Floating => (1.0, self.gap, self.theme.radius),
+            Layout::Pills | Layout::Transparent => (0.0, 0.0, 0.0),
+        };
+        ResolvedTrack {
+            color: ov.and_then(|o| o.color).unwrap_or(self.theme.color),
+            opacity: ov.and_then(|o| o.opacity).unwrap_or(opacity),
+            radius: ov.and_then(|o| o.radius).unwrap_or(radius),
+            padding: ov.and_then(|o| o.padding).unwrap_or(padding),
         }
     }
-    pub fn pill_pad_x(&self) -> f32 { self.pill_padding_x.unwrap_or(self.pill_padding) }
-    pub fn pill_pad_y(&self) -> f32 { self.pill_padding_y.unwrap_or(self.pill_padding) }
-    pub fn effective_pill_radius(&self, cell_h: f32) -> f32 {
-        match self.theme {
-            Theme::Neumorphic => {
-                let pill_h = cell_h + 2.0 * self.pill_pad_y();
-                pill_h / 2.0
-            }
-            _ => self.pill_radius,
+
+    pub fn resolve_pill(&self) -> ResolvedPill {
+        let ov = self.theme.pill.as_ref();
+        let opacity = match self.layout {
+            Layout::Transparent => 0.5,
+            _ => 1.0,
+        };
+        ResolvedPill {
+            color: ov.and_then(|o| o.color).unwrap_or(self.theme.color),
+            opacity: ov.and_then(|o| o.opacity).unwrap_or(opacity),
+            radius: ov.and_then(|o| o.radius).unwrap_or(self.theme.radius),
+            padding: ov.and_then(|o| o.padding).unwrap_or(self.theme.padding),
         }
     }
 }
@@ -115,24 +157,16 @@ pub enum Position {
     Bottom,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct Background {
-    #[serde(default = "default_bg_color")]
-    pub color: Rgba,
-    #[serde(default = "default_opacity")]
-    pub opacity: f32,
-}
+// --- Bar definition ---
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct BarDef {
     #[serde(default)]
-    pub order: Vec<String>,
-    #[serde(default)]
     pub modules: HashMap<String, ModuleDef>,
 }
 
-// --- Module definition (flat, no nesting) ---
+// --- Module definition ---
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -152,7 +186,7 @@ pub struct ModuleDef {
     pub key_hints: Vec<KeyHintDef>,
     #[serde(default, rename = "type")]
     pub module_type: Option<String>,
-    #[serde(default)]
+    #[serde(default, flatten)]
     pub params: HashMap<String, serde_json::Value>,
     #[serde(default)]
     pub commands: HashMap<String, String>,
@@ -250,48 +284,28 @@ struct RuntimeSettings {
     position: Position,
     #[serde(default = "default_font")]
     font: String,
+    #[serde(default = "default_emoji_font")]
+    emoji_font: String,
     #[serde(default = "default_font_size")]
     font_size: f32,
     #[serde(default)]
-    theme: Theme,
+    layout: Layout,
+    #[serde(default = "default_gap")]
+    gap: f32,
+    #[serde(default = "default_scale")]
+    scale: f32,
     #[serde(default)]
-    layout: Option<Layout>,
-    #[serde(default)]
-    margin: u32,
-    #[serde(default)]
-    margin_x: Option<f32>,
-    #[serde(default)]
-    margin_y: Option<f32>,
-    #[serde(default)]
-    track_padding: f32,
-    #[serde(default)]
-    track_padding_x: Option<f32>,
-    #[serde(default)]
-    track_padding_y: Option<f32>,
-    #[serde(default = "default_pill_padding")]
-    pill_padding: f32,
-    #[serde(default)]
-    pill_padding_x: Option<f32>,
-    #[serde(default)]
-    pill_padding_y: Option<f32>,
-    #[serde(default = "default_pill_radius")]
-    pill_radius: f32,
-    #[serde(default = "default_pill_opacity")]
-    pill_opacity: f32,
-    #[serde(default)]
-    background: Background,
+    theme: ThemeCfg,
     icons_dir: Option<String>,
     #[serde(default = "default_icon_weight")]
     icon_weight: String,
     #[serde(default)]
-    output_scales: HashMap<String, f32>,
+    monitors: HashMap<String, MonitorCfg>,
 }
 
 #[derive(Debug, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
 struct RuntimeBarDef {
-    #[serde(default)]
-    order: Vec<String>,
     #[serde(default)]
     modules: HashMap<String, serde_json::Value>,
 }
@@ -299,26 +313,75 @@ struct RuntimeBarDef {
 // --- Loading ---
 
 impl Config {
+    pub fn config_dir() -> PathBuf {
+        let xdg = std::env::var("XDG_CONFIG_HOME")
+            .unwrap_or_else(|_| {
+                let home = std::env::var("HOME").unwrap_or_default();
+                format!("{home}/.config")
+            });
+        PathBuf::from(xdg).join("cyberdeck")
+    }
+
+    /// Find config file: explicit path, or probe config.toml then config.json
+    fn config_path(path: Option<&str>) -> PathBuf {
+        if let Some(p) = path {
+            return PathBuf::from(p);
+        }
+        let dir = Self::config_dir();
+        let toml = dir.join("config.toml");
+        if toml.exists() { return toml; }
+        dir.join("config.json")
+    }
+
+    fn resolve_icons_dir(configured: Option<String>) -> Option<String> {
+        if configured.is_some() { return configured; }
+        if let Ok(env) = std::env::var("CYBERDECK_ICONS") {
+            if PathBuf::from(&env).is_dir() { return Some(env); }
+        }
+        let home = std::env::var("HOME").unwrap_or_default();
+        let candidates = [
+            format!("{home}/.local/share/cyberdeck/icons"),
+            "/usr/share/cyberdeck/icons".to_string(),
+            "/usr/local/share/cyberdeck/icons".to_string(),
+        ];
+        for c in &candidates {
+            if PathBuf::from(c).is_dir() { return Some(c.clone()); }
+        }
+        None
+    }
+
+    const DEFAULT_CONFIG: &str = r#"{
+  "settings": {},
+  "bar": {
+    "modules": {
+      "calendar": {},
+      "workspaces": {},
+      "window": {},
+      "notifications": {}
+    }
+  }
+}"#;
+
     pub fn load(path: Option<&str>) -> Result<Self, Box<dyn std::error::Error>> {
         let builtins = crate::modlib::builtin_modules();
+        let path = Self::config_path(path);
+        let is_toml = path.extension().map(|e| e == "toml").unwrap_or(false);
 
-        let path = match path {
-            Some(p) => PathBuf::from(p),
-            None => {
-                let xdg = std::env::var("XDG_CONFIG_HOME")
-                    .unwrap_or_else(|_| {
-                        let home = std::env::var("HOME").unwrap_or_default();
-                        format!("{home}/.config")
-                    });
-                PathBuf::from(xdg).join("cyberdeck/config.json")
-            }
+        let data = if path.exists() {
+            std::fs::read_to_string(&path)
+                .map_err(|e| format!("failed to read config at {}: {e}", path.display()))?
+        } else {
+            log::info!("no config found at {}, using defaults", path.display());
+            Self::DEFAULT_CONFIG.to_string()
         };
 
-        let data = std::fs::read_to_string(&path)
-            .map_err(|e| format!("failed to read config at {}: {e}", path.display()))?;
-
-        // Detect old-style full config (modules have "name" field) vs new sparse config
-        let raw: serde_json::Value = serde_json::from_str(&data)?;
+        let raw: serde_json::Value = if is_toml {
+            let toml_val: toml::Value = toml::from_str(&data)
+                .map_err(|e| format!("failed to parse TOML config: {e}"))?;
+            toml_to_json(toml_val)
+        } else {
+            serde_json::from_str(&data)?
+        };
         let is_legacy = raw.get("bar")
             .and_then(|b| b.get("modules"))
             .and_then(|m| m.as_object())
@@ -326,41 +389,33 @@ impl Config {
             .unwrap_or(false);
 
         let config = if is_legacy {
-            // Old format: full module definitions in JSON, ignore builtins
             serde_json::from_value::<Config>(raw)?
         } else {
-            // New format: sparse overrides merged with builtins
             let runtime: RuntimeConfig = serde_json::from_value(raw)?;
-            let (order, modules) = Self::merge_modules(builtins, &runtime.bar.order, runtime.bar.modules);
+            let modules = Self::merge_modules(builtins, runtime.bar.modules);
             Config {
                 settings: Settings {
                     position: runtime.settings.position,
                     font: runtime.settings.font,
+                    emoji_font: runtime.settings.emoji_font,
                     font_size: runtime.settings.font_size,
-                    theme: runtime.settings.theme,
                     layout: runtime.settings.layout,
-                    margin: runtime.settings.margin,
-                    margin_x: runtime.settings.margin_x,
-                    margin_y: runtime.settings.margin_y,
-                    track_padding: runtime.settings.track_padding,
-                    track_padding_x: runtime.settings.track_padding_x,
-                    track_padding_y: runtime.settings.track_padding_y,
-                    pill_padding: runtime.settings.pill_padding,
-                    pill_padding_x: runtime.settings.pill_padding_x,
-                    pill_padding_y: runtime.settings.pill_padding_y,
-                    pill_radius: runtime.settings.pill_radius,
-                    pill_opacity: runtime.settings.pill_opacity,
-                    background: runtime.settings.background,
+                    gap: runtime.settings.gap,
+                    scale: runtime.settings.scale,
+                    theme: runtime.settings.theme,
                     icons_dir: runtime.settings.icons_dir,
                     icon_weight: runtime.settings.icon_weight,
-                    output_scales: runtime.settings.output_scales,
+                    monitors: runtime.settings.monitors,
                 },
                 bar: BarDef {
-                    order,
                     modules,
                 },
             }
         };
+
+        // Resolve icons dir with fallback chain
+        let mut config = config;
+        config.settings.icons_dir = Self::resolve_icons_dir(config.settings.icons_dir);
 
         config.write_params();
         Ok(config)
@@ -368,68 +423,52 @@ impl Config {
 
     fn merge_modules(
         builtins: HashMap<String, ModuleDef>,
-        order: &[String],
         overrides: HashMap<String, serde_json::Value>,
-    ) -> (Vec<String>, HashMap<String, ModuleDef>) {
+    ) -> HashMap<String, ModuleDef> {
         let mut result = HashMap::new();
 
-        // If no order specified, use all builtins alphabetically
-        let default_order: Vec<String>;
-        let order = if order.is_empty() {
-            default_order = {
-                let mut keys: Vec<String> = builtins.keys().cloned().collect();
-                keys.sort();
-                keys
-            };
-            &default_order
-        } else {
-            order
-        };
+        // If no modules specified in config, include all builtins
+        let include_all = overrides.is_empty();
 
-        for id in order {
-            let base = builtins.get(id);
-            let ov = overrides.get(id);
+        for (id, base_def) in &builtins {
+            if !include_all && !overrides.contains_key(id) {
+                continue;
+            }
 
-            let def = match (base, ov) {
-                (Some(base_def), Some(override_val)) => {
-                    // Merge: serialize base to Value, deep-merge override, deserialize back
-                    let mut base_val = serde_json::to_value(base_def)
-                        .expect("failed to serialize builtin module");
-                    json_merge(&mut base_val, override_val.clone());
-                    serde_json::from_value(base_val).unwrap_or_else(|e| {
-                        log::error!("failed to merge module {id}: {e}");
-                        // Fall back to just the builtin
-                        builtins.get(id).map(|b| {
-                            serde_json::from_value(serde_json::to_value(b).unwrap()).unwrap()
-                        }).unwrap_or_else(|| serde_json::from_value(override_val.clone()).unwrap())
-                    })
-                }
-                (Some(base_def), None) => {
-                    // No override, reserialize the builtin
-                    let val = serde_json::to_value(base_def)
-                        .expect("failed to serialize builtin module");
-                    serde_json::from_value(val).expect("failed to deserialize builtin module")
-                }
-                (None, Some(override_val)) => {
-                    // User-defined module not in builtins
-                    serde_json::from_value(override_val.clone()).unwrap_or_else(|e| {
-                        log::error!("failed to parse user module {id}: {e}");
-                        return ModuleDef {
-                            name: id.clone(),
-                            ..Default::default()
-                        };
-                    })
-                }
-                (None, None) => {
-                    log::warn!("module {id} in order but not found in builtins or config");
-                    continue;
-                }
+            let def = if let Some(override_val) = overrides.get(id) {
+                let mut base_val = serde_json::to_value(base_def)
+                    .expect("failed to serialize builtin module");
+                json_merge(&mut base_val, override_val.clone());
+                serde_json::from_value(base_val).unwrap_or_else(|e| {
+                    log::error!("failed to merge module {id}: {e}");
+                    let val = serde_json::to_value(base_def).unwrap();
+                    serde_json::from_value(val).unwrap()
+                })
+            } else {
+                let val = serde_json::to_value(base_def)
+                    .expect("failed to serialize builtin module");
+                serde_json::from_value(val).expect("failed to deserialize builtin module")
             };
 
             result.insert(id.clone(), def);
         }
 
-        (order.to_vec(), result)
+        // User-defined modules not in builtins
+        for (id, override_val) in &overrides {
+            if builtins.contains_key(id) {
+                continue;
+            }
+            let def = serde_json::from_value(override_val.clone()).unwrap_or_else(|e| {
+                log::error!("failed to parse user module {id}: {e}");
+                ModuleDef {
+                    name: id.clone(),
+                    ..Default::default()
+                }
+            });
+            result.insert(id.clone(), def);
+        }
+
+        result
     }
 
     fn params_dir() -> PathBuf {
@@ -502,28 +541,39 @@ fn json_merge(base: &mut serde_json::Value, override_val: serde_json::Value) {
     }
 }
 
+/// Convert a TOML value tree to a serde_json value tree
+fn toml_to_json(val: toml::Value) -> serde_json::Value {
+    match val {
+        toml::Value::String(s) => serde_json::Value::String(s),
+        toml::Value::Integer(i) => serde_json::json!(i),
+        toml::Value::Float(f) => serde_json::json!(f),
+        toml::Value::Boolean(b) => serde_json::Value::Bool(b),
+        toml::Value::Datetime(d) => serde_json::Value::String(d.to_string()),
+        toml::Value::Array(a) => {
+            serde_json::Value::Array(a.into_iter().map(toml_to_json).collect())
+        }
+        toml::Value::Table(t) => {
+            let map = t.into_iter().map(|(k, v)| (k, toml_to_json(v))).collect();
+            serde_json::Value::Object(map)
+        }
+    }
+}
+
 // --- Defaults ---
 
 fn default_position() -> Position { Position::Top }
 fn default_font() -> String { "monospace".into() }
+fn default_emoji_font() -> String { "Noto Emoji".into() }
 fn default_font_size() -> f32 { 14.0 }
-fn default_bg_color() -> Rgba { Rgba::new(0x22, 0x22, 0x22, 255) }
+fn default_color() -> Rgba { Rgba::new(0x22, 0x22, 0x22, 255) }
 fn default_opacity() -> f32 { 0.8 }
-fn default_pill_padding() -> f32 { 6.0 }
-fn default_pill_radius() -> f32 { 6.0 }
-fn default_pill_opacity() -> f32 { 1.0 }
+fn default_radius() -> f32 { 6.0 }
+fn default_padding() -> f32 { 6.0 }
+fn default_gap() -> f32 { 6.0 }
+fn default_scale() -> f32 { 1.0 }
 fn default_interval() -> u64 { 5 }
 fn default_icon_weight() -> String { "light".into() }
 fn default_hook_timeout() -> u64 { 5 }
-
-impl Default for Background {
-    fn default() -> Self {
-        Self {
-            color: default_bg_color(),
-            opacity: default_opacity(),
-        }
-    }
-}
 
 impl Default for Position {
     fn default() -> Self {

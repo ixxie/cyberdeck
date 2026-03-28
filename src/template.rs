@@ -12,7 +12,7 @@ pub struct TemplateEngine {
 }
 
 impl TemplateEngine {
-    pub fn new(root: &BarDef) -> Self {
+    pub fn new(root: &BarDef, icon_map: &HashMap<String, String>) -> Self {
         let mut tera = Tera::default();
 
         // Register templates for all modules
@@ -61,18 +61,7 @@ impl TemplateEngine {
             }
         }
 
-        // Parse icon map once, clone for closures
-        let icon_map: HashMap<String, String> = {
-            let json: HashMap<String, String> =
-                serde_json::from_str(include_str!("../assets/icons.json")).unwrap_or_default();
-            json.into_iter().filter_map(|(name, cp)| {
-                u32::from_str_radix(
-                    cp.trim_start_matches("0x").trim_start_matches("U+"), 16
-                ).ok()
-                .and_then(char::from_u32)
-                .map(|ch| (name, ch.to_string()))
-            }).collect()
-        };
+        let icon_map: HashMap<String, String> = icon_map.clone();
 
         let filter_map = icon_map.clone();
         tera.register_filter("icon", move |value: &Value, _args: &HashMap<String, Value>| {

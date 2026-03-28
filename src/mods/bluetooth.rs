@@ -93,23 +93,22 @@ impl BluetoothDeep {
 }
 
 impl InteractiveModule for BluetoothDeep {
-    fn render_center(&self, fg: Rgba, data: &Value) -> Vec<Elem> {
-        let highlight_fg = Rgba::new(fg.r, fg.g, fg.b, (fg.a as f32 * 0.72) as u8); // active
-        let idle_fg = Rgba::new(fg.r, fg.g, fg.b, (fg.a as f32 * 0.44) as u8);     // idle
+    fn render_center(&self, fg: Rgba, data: &Value) -> Vec<Vec<Elem>> {
+        let highlight_fg = Rgba::new(fg.r, fg.g, fg.b, (fg.a as f32 * 0.72) as u8);
+        let idle_fg = Rgba::new(fg.r, fg.g, fg.b, (fg.a as f32 * 0.44) as u8);
 
         let powered = data.get("powered").and_then(|v| v.as_bool()).unwrap_or(false);
         if !powered {
-            return vec![Elem::text("off").fg(idle_fg)];
+            return vec![vec![Elem::text("off").fg(idle_fg)]];
         }
 
         let devices = data.get("devices").and_then(|v| v.as_array());
         let devices = match devices {
             Some(d) if !d.is_empty() => d,
-            _ => return vec![Elem::text("no devices").fg(idle_fg)],
+            _ => return vec![vec![Elem::text("no devices").fg(idle_fg)]],
         };
 
-        let mut widgets = Vec::new();
-        for (i, dev) in devices.iter().enumerate() {
+        devices.iter().enumerate().map(|(i, dev)| {
             let name = dev.get("name").and_then(|v| v.as_str()).unwrap_or("?");
             let connected = dev.get("connected").and_then(|v| v.as_bool()).unwrap_or(false);
             let dev_fg = if i == self.cursor {
@@ -120,11 +119,11 @@ impl InteractiveModule for BluetoothDeep {
                 idle_fg
             };
             let prefix = if connected { "●" } else { "○" };
-            widgets.push(Elem::text(format!("{prefix} {name}")).fg(dev_fg));
-        }
-
-        widgets
+            vec![Elem::text(format!("{prefix} {name}")).fg(dev_fg)]
+        }).collect()
     }
+
+    fn cursor(&self) -> Option<usize> { Some(self.cursor) }
 
     fn breadcrumb(&self) -> Vec<String> {
         vec!["Bluetooth".into()]

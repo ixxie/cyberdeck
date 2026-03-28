@@ -183,16 +183,16 @@ impl NetworkDeep {
 }
 
 impl InteractiveModule for NetworkDeep {
-    fn render_center(&self, fg: Rgba, data: &Value) -> Vec<Elem> {
+    fn render_center(&self, fg: Rgba, data: &Value) -> Vec<Vec<Elem>> {
         let active_fg = Rgba::new(fg.r, fg.g, fg.b, (fg.a as f32 * 0.72) as u8);
         let idle_fg = Rgba::new(fg.r, fg.g, fg.b, (fg.a as f32 * 0.44) as u8);
 
         match &self.state {
             NetState::Password { ssid, input } => {
                 let dots = "•".repeat(input.len());
-                return vec![
+                return vec![vec![
                     Elem::text(format!("{ssid} password: {dots}▎")).fg(fg),
-                ];
+                ]];
             }
             NetState::Browse => {}
         }
@@ -200,11 +200,10 @@ impl InteractiveModule for NetworkDeep {
         let networks = data.get("networks").and_then(|v| v.as_array());
         let networks = match networks {
             Some(n) if !n.is_empty() => n,
-            _ => return vec![Elem::text("no networks").fg(idle_fg)],
+            _ => return vec![vec![Elem::text("no networks").fg(idle_fg)]],
         };
 
-        let mut widgets = Vec::new();
-        for (i, net) in networks.iter().enumerate() {
+        networks.iter().enumerate().map(|(i, net)| {
             let ssid = net.get("ssid").and_then(|v| v.as_str()).unwrap_or("?");
             let signal = net.get("signal").and_then(|v| v.as_i64()).unwrap_or(0);
             let in_use = net.get("in_use").and_then(|v| v.as_bool()).unwrap_or(false);
@@ -227,13 +226,11 @@ impl InteractiveModule for NetworkDeep {
             } else {
                 "○"
             };
-            widgets.push(
-                Elem::text(format!("{prefix} {ssid} {signal}% {lock}")).fg(net_fg),
-            );
-        }
-
-        widgets
+            vec![Elem::text(format!("{prefix} {ssid} {signal}% {lock}")).fg(net_fg)]
+        }).collect()
     }
+
+    fn cursor(&self) -> Option<usize> { Some(self.cursor) }
 
     fn breadcrumb(&self) -> Vec<String> {
         match &self.state {

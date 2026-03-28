@@ -7,13 +7,7 @@ in
     position = "top";
     font = "monospace";
     font-size = 14;
-    pill-padding = 6;
-    pill-radius = 6;
     icon-weight = "duotone";
-    background = {
-      color = "#222222";
-      opacity = 0.8;
-    };
   };
 
   modules = {
@@ -31,6 +25,7 @@ in
     outputs = importMod "outputs";
     profiles = importMod "profiles";
     session = importMod "session";
+    snip = importMod "snip";
     storage = importMod "storage";
     system = importMod "system";
     wallpaper = importMod "wallpaper";

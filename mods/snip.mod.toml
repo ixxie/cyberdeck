@@ -1,0 +1,51 @@
+name = "Snip"
+icon = "scissors"
+type = "snip"
+
+[source]
+type = "native"
+kind = "snip"
+interval = 1
+
+[badges.default]
+template = '{{ "record" | icon }} rec'
+condition = "{{ recording }}"
+highlight = "{{ recording }}"
+
+[widget]
+template = '{% if recording %}recording...{% else %}screenshots & recording{% endif %}'
+
+[[key-hints]]
+key = "r"
+action = ""
+label = "region"
+icon = "selection"
+
+[[key-hints]]
+key = "s"
+action = ""
+label = "screen"
+icon = "monitor"
+
+[[key-hints]]
+key = "v"
+action = ""
+label = "record"
+icon = "record"
+
+[[key-hints]]
+key = "a"
+action = ""
+label = "rec+audio"
+icon = "microphone"
+
+[[key-hints]]
+key = "x"
+action = ""
+label = "stop"
+icon = "stop"
+
+[[key-hints]]
+key = "Esc"
+action = "back"
+label = "back"
