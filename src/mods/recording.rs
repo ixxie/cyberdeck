@@ -15,7 +15,7 @@ fn is_recording() -> bool {
     REC_PID.lock().unwrap().is_some()
 }
 
-fn stop_recording() -> bool {
+pub fn stop_recording() -> bool {
     let mut pid = REC_PID.lock().unwrap();
     if let Some(p) = pid.take() {
         unsafe { libc::kill(p as i32, libc::SIGINT); }
@@ -33,7 +33,7 @@ fn slurp_region() -> Option<String> {
     if s.is_empty() { None } else { Some(s) }
 }
 
-fn start_recording(device_audio: bool, _mic_audio: bool) {
+pub fn start_recording(device_audio: bool, _mic_audio: bool) {
     if is_recording() { return; }
 
     std::thread::spawn(move || {

@@ -1,3 +1,4 @@
+mod actions;
 mod appicon;
 mod bar;
 mod cli;

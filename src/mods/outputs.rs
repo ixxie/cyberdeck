@@ -1,5 +1,6 @@
 use serde_json::{json, Value};
 
+use smithay_client_toolkit::reexports::calloop::channel::Sender;
 use smithay_client_toolkit::seat::keyboard::{KeyEvent, Keysym};
 
 use crate::bar::BarApp;
@@ -8,6 +9,32 @@ use crate::config::KeyHintDef;
 use crate::layout::Elem;
 use crate::mods::{InteractiveModule, KeyResult};
 use crate::pipewire;
+
+pub fn subscribe(
+    params: serde_json::Map<String, Value>,
+    sender: Sender<(String, Value)>,
+    id: String,
+) {
+    let mut last_vol = i64::MIN;
+    let mut last_muted = false;
+    let mut last_sink = String::new();
+    loop {
+        pipewire::invalidate();
+        let val = poll(&params);
+        let vol = val.get("volume").and_then(|v| v.as_i64()).unwrap_or(0);
+        let muted = val.get("muted").and_then(|v| v.as_bool()).unwrap_or(false);
+        let sink = val.get("sink").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if vol != last_vol || muted != last_muted || sink != last_sink {
+            last_vol = vol;
+            last_muted = muted;
+            last_sink = sink;
+            if sender.send((id.clone(), val)).is_err() {
+                return;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+}
 
 pub fn poll(_params: &serde_json::Map<String, Value>) -> Value {
     let pw = pipewire::query();

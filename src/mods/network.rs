@@ -1,6 +1,8 @@
 use serde_json::{json, Value};
+use std::io::BufRead;
 use std::process::Command;
 
+use smithay_client_toolkit::reexports::calloop::channel::Sender;
 use smithay_client_toolkit::seat::keyboard::{KeyEvent, Keysym};
 
 use crate::bar::BarApp;
@@ -8,6 +10,43 @@ use crate::color::Rgba;
 use crate::config::KeyHintDef;
 use crate::layout::Elem;
 use crate::mods::{InteractiveModule, KeyResult};
+
+pub fn subscribe(
+    params: serde_json::Map<String, Value>,
+    sender: Sender<(String, Value)>,
+    id: String,
+) {
+    loop {
+        let child = Command::new("nmcli")
+            .arg("monitor")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+
+        let Ok(mut child) = child else {
+            log::error!("failed to spawn nmcli monitor");
+            std::thread::sleep(std::time::Duration::from_secs(10));
+            continue;
+        };
+
+        let stdout = child.stdout.take().unwrap();
+        let reader = std::io::BufReader::new(stdout);
+
+        for line in reader.lines() {
+            let Ok(_) = line else { break };
+            // Any output means network state changed
+            let val = poll(&params);
+            if sender.send((id.clone(), val)).is_err() {
+                let _ = child.kill();
+                return;
+            }
+        }
+
+        let _ = child.wait();
+        log::warn!("nmcli monitor exited, restarting...");
+        std::thread::sleep(std::time::Duration::from_secs(5));
+    }
+}
 
 pub fn poll(_params: &serde_json::Map<String, Value>) -> Value {
     let disconnected = json!({

@@ -240,21 +240,33 @@ fn run_module_cmd(args: &[String]) {
         return;
     }
 
-    // Try [[actions]] first
     if let Some(act) = module.action_by_name(action) {
         if act.run == "native" {
-            ipc::send_request(&IpcRequest::Action {
-                module: mod_name.clone(),
-                action: action.to_string(),
-                args: extra.to_vec(),
-            });
+            let params: serde_json::Map<String, serde_json::Value> = module
+                .params.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            match crate::actions::exec_native(mod_name, action, extra, &params) {
+                crate::actions::ActionResult::Ok { toast } => {
+                    ipc::notify_bar(mod_name, &toast);
+                }
+                crate::actions::ActionResult::BarOnly => {
+                    ipc::send_request(&IpcRequest::Action {
+                        module: mod_name.clone(),
+                        action: action.to_string(),
+                        args: extra.to_vec(),
+                    });
+                }
+                crate::actions::ActionResult::Unknown => {
+                    eprintln!("unknown native action '{action}' for module '{mod_name}'");
+                    std::process::exit(1);
+                }
+            }
         } else {
             let full = if extra.is_empty() {
                 act.run.clone()
             } else {
                 format!("{} {}", act.run, extra.join(" "))
             };
-            exec_shell(&full);
+            exec_shell_and_notify(mod_name, &act.label, &full);
         }
         return;
     }
@@ -264,7 +276,7 @@ fn run_module_cmd(args: &[String]) {
     std::process::exit(1);
 }
 
-fn exec_shell(cmd: &str) {
+fn exec_shell_and_notify(module: &str, label: &str, cmd: &str) {
     let status = std::process::Command::new("sh")
         .args(["-c", cmd])
         .status()
@@ -272,6 +284,10 @@ fn exec_shell(cmd: &str) {
             eprintln!("failed to run '{cmd}': {e}");
             std::process::exit(1);
         });
+    if status.success() {
+        let toast = if label.is_empty() { module } else { label };
+        ipc::notify_bar(module, toast);
+    }
     std::process::exit(status.code().unwrap_or(1));
 }
 

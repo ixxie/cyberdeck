@@ -9,7 +9,7 @@ mod launcher;
 mod network;
 mod notifications;
 mod session;
-mod recording;
+pub mod recording;
 mod storage;
 mod system;
 mod calendar;
@@ -37,6 +37,7 @@ use crate::layout::Elem;
 use crate::source::SharedState;
 
 type PollFn = fn(&serde_json::Map<String, serde_json::Value>) -> serde_json::Value;
+type SubscribeFn = fn(serde_json::Map<String, serde_json::Value>, Sender<(String, serde_json::Value)>, String);
 
 struct SourceSpec {
     poll_fn: PollFn,
@@ -44,6 +45,13 @@ struct SourceSpec {
     id: String,
     params: serde_json::Map<String, serde_json::Value>,
     nudge: Arc<AtomicBool>,
+}
+
+struct SubscribeSpec {
+    subscribe_fn: SubscribeFn,
+    poll_fn: PollFn,
+    id: String,
+    params: serde_json::Map<String, serde_json::Value>,
 }
 
 pub fn register<D: 'static>(
@@ -79,6 +87,18 @@ pub fn register<D: 'static>(
         }
     };
 
+    // Some modules use event subscription instead of polling
+    let subscribe_fn: Option<SubscribeFn> = match kind {
+        "workspaces" => Some(workspaces::subscribe),
+        "window" => Some(window::subscribe),
+        "media" => Some(media::subscribe),
+        "brightness" => Some(brightness::subscribe),
+        "outputs" => Some(outputs::subscribe),
+        "inputs" => Some(inputs::subscribe),
+        "network" => Some(network::subscribe),
+        _ => None,
+    };
+
     let params_map: serde_json::Map<String, serde_json::Value> = params.iter()
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
@@ -97,16 +117,28 @@ pub fn register<D: 'static>(
         }
     }).expect("failed to register native source channel");
 
-    // Spawn source thread
     let nudge = Arc::new(AtomicBool::new(false));
-    let spec = SourceSpec {
-        poll_fn,
-        interval,
-        id: id.to_string(),
-        params: params_map,
-        nudge: nudge.clone(),
-    };
-    spawn_poll_thread(spec, sender);
+
+    if let Some(sub_fn) = subscribe_fn {
+        // Subscribe mode: initial poll then event-driven
+        let spec = SubscribeSpec {
+            subscribe_fn: sub_fn,
+            poll_fn,
+            id: id.to_string(),
+            params: params_map,
+        };
+        spawn_subscribe_thread(spec, sender);
+    } else {
+        // Poll mode
+        let spec = SourceSpec {
+            poll_fn,
+            interval,
+            id: id.to_string(),
+            params: params_map,
+            nudge: nudge.clone(),
+        };
+        spawn_poll_thread(spec, sender);
+    }
 
     Some((token, nudge))
 }
@@ -159,6 +191,24 @@ pub fn create_interactive(
         ))),
         _ => None,
     }
+}
+
+fn spawn_subscribe_thread(spec: SubscribeSpec, sender: Sender<(String, serde_json::Value)>) {
+    std::thread::Builder::new()
+        .name(format!("sub-{}", spec.id))
+        .spawn(move || {
+            log::debug!("subscribe thread started: {}", spec.id);
+
+            // Initial seed via poll
+            let val = (spec.poll_fn)(&spec.params);
+            if sender.send((spec.id.clone(), val)).is_err() {
+                return;
+            }
+
+            // Event-driven updates
+            (spec.subscribe_fn)(spec.params, sender, spec.id);
+        })
+        .expect("failed to spawn subscribe thread");
 }
 
 fn spawn_poll_thread(spec: SourceSpec, sender: Sender<(String, serde_json::Value)>) {

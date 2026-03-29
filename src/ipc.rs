@@ -31,6 +31,8 @@ pub enum IpcRequest {
     SetStyle { style: String },
     #[serde(rename = "action")]
     Action { module: String, action: String, #[serde(default)] args: Vec<String> },
+    #[serde(rename = "event")]
+    Event { module: String, toast: String },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -225,6 +227,20 @@ fn dispatch(req: IpcRequest, app: &mut BarApp) -> IpcResponse {
 
             IpcResponse::err(&format!("unknown action '{action}' in module '{module}'"))
         }
+        IpcRequest::Event { module, toast } => {
+            app.source_mgr.nudge(&module);
+            // Only show toast if module has no spotlight hook
+            let has_spotlight = app.config.bar.modules.get(&module)
+                .map(|m| m.hooks.iter().any(|h| h.action == "spotlight"))
+                .unwrap_or(false);
+            if !has_spotlight {
+                let icon = app.config.bar.modules.get(&module)
+                    .and_then(|m| m.icon.clone());
+                app.set_toast(&toast, icon, 3);
+            }
+            app.dirty.set(true);
+            state_response(app)
+        }
         IpcRequest::SetStyle { style } => {
             match style.as_str() {
                 "classic" => app.set_layout(crate::config::Layout::Classic),
@@ -287,6 +303,20 @@ fn build_key_event(key: &str) -> KeyEvent {
 }
 
 // Client mode
+
+/// Fire-and-forget notification to the bar. Silently drops if bar not running.
+pub fn notify_bar(module: &str, toast: &str) {
+    if toast.is_empty() { return; }
+    let path = sock_path();
+    let Ok(mut stream) = UnixStream::connect(&path) else { return };
+    let req = IpcRequest::Event {
+        module: module.to_string(),
+        toast: toast.to_string(),
+    };
+    let mut json = serde_json::to_string(&req).unwrap_or_default();
+    json.push('\n');
+    let _ = stream.write_all(json.as_bytes());
+}
 
 pub fn send_request(req: &IpcRequest) {
     let path = sock_path();

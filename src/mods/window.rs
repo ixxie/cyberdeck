@@ -1,5 +1,46 @@
 use serde_json::{json, Value};
+use std::io::BufRead;
 use std::process::Command;
+
+use smithay_client_toolkit::reexports::calloop::channel::Sender;
+
+pub fn subscribe(
+    params: serde_json::Map<String, Value>,
+    sender: Sender<(String, Value)>,
+    id: String,
+) {
+    loop {
+        let child = Command::new("niri")
+            .args(["msg", "--json", "event-stream"])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+
+        let Ok(mut child) = child else {
+            log::error!("failed to spawn niri event-stream");
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            continue;
+        };
+
+        let stdout = child.stdout.take().unwrap();
+        let reader = std::io::BufReader::new(stdout);
+
+        for line in reader.lines() {
+            let Ok(line) = line else { break };
+            if line.contains("WindowsChanged") || line.contains("WindowFocusChanged") {
+                let val = poll(&params);
+                if sender.send((id.clone(), val)).is_err() {
+                    let _ = child.kill();
+                    return;
+                }
+            }
+        }
+
+        let _ = child.wait();
+        log::warn!("niri event-stream exited (window), restarting...");
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+}
 
 pub fn poll(_params: &serde_json::Map<String, Value>) -> Value {
     let out = Command::new("niri")

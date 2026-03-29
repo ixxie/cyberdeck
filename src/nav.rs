@@ -109,10 +109,17 @@ impl BarApp {
                     }
                     if let Some(mod_id) = self.nav.stack.first().cloned() {
                         self.source_mgr.nudge(&mod_id);
-                        let icon = self.config.bar.modules.get(&mod_id)
-                            .and_then(|m| m.icon.clone());
-                        let label = if act.label.is_empty() { act.name.clone() } else { act.label.clone() };
-                        self.set_toast(&label, icon, 3);
+                        // Only show toast if module has no spotlight hook
+                        // (spotlight replaces toast for modules like brightness/outputs)
+                        let has_spotlight = self.config.bar.modules.get(&mod_id)
+                            .map(|m| m.hooks.iter().any(|h| h.action == "spotlight"))
+                            .unwrap_or(false);
+                        if !has_spotlight {
+                            let icon = self.config.bar.modules.get(&mod_id)
+                                .and_then(|m| m.icon.clone());
+                            let label = if act.label.is_empty() { act.name.clone() } else { act.label.clone() };
+                            self.set_toast(&label, icon, 3);
+                        }
                     }
                     self.set_nav(NavState::new());
                     return;

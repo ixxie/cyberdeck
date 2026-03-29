@@ -2,6 +2,28 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::Path;
 
+use smithay_client_toolkit::reexports::calloop::channel::Sender;
+
+pub fn subscribe(
+    params: serde_json::Map<String, Value>,
+    sender: Sender<(String, Value)>,
+    id: String,
+) {
+    // Fast poll loop: check every 100ms, only send on change
+    let mut last = u64::MAX;
+    loop {
+        let val = poll(&params);
+        let cur = val.get("raw").and_then(|v| v.as_u64()).unwrap_or(0);
+        if cur != last {
+            last = cur;
+            if sender.send((id.clone(), val)).is_err() {
+                return;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
 pub fn poll(_params: &serde_json::Map<String, Value>) -> Value {
     let bl_dir = Path::new("/sys/class/backlight");
     let (raw, max) = fs::read_dir(bl_dir)

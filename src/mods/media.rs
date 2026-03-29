@@ -1,6 +1,8 @@
 use serde_json::{json, Value};
+use std::io::BufRead;
 use std::process::Command;
 
+use smithay_client_toolkit::reexports::calloop::channel::Sender;
 use smithay_client_toolkit::seat::keyboard::{KeyEvent, Keysym};
 
 use crate::bar::BarApp;
@@ -8,6 +10,47 @@ use crate::color::Rgba;
 use crate::config::KeyHintDef;
 use crate::layout::Elem;
 use crate::mods::{InteractiveModule, KeyResult};
+
+pub fn subscribe(
+    _params: serde_json::Map<String, Value>,
+    sender: Sender<(String, Value)>,
+    id: String,
+) {
+    let fmt = r#"{"player":"{{playerName}}","title":"{{title}}","artist":"{{artist}}","album":"{{album}}","status":"{{status}}"}"#;
+
+    loop {
+        let child = Command::new("playerctl")
+            .args(["metadata", "--follow", "--format", fmt])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+
+        let Ok(mut child) = child else {
+            log::error!("failed to spawn playerctl --follow");
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            continue;
+        };
+
+        let stdout = child.stdout.take().unwrap();
+        let reader = std::io::BufReader::new(stdout);
+
+        for line in reader.lines() {
+            let Ok(line) = line else { break };
+            let trimmed = line.trim();
+            if trimmed.is_empty() { continue; }
+            let val = serde_json::from_str::<Value>(trimmed)
+                .unwrap_or_else(|_| defaults());
+            if sender.send((id.clone(), val)).is_err() {
+                let _ = child.kill();
+                return;
+            }
+        }
+
+        let _ = child.wait();
+        log::warn!("playerctl --follow exited, restarting...");
+        std::thread::sleep(std::time::Duration::from_secs(2));
+    }
+}
 
 pub fn poll(_params: &serde_json::Map<String, Value>) -> Value {
     let out = Command::new("playerctl")

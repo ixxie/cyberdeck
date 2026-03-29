@@ -2,6 +2,7 @@ use std::process::Command;
 
 use serde_json::{json, Value};
 
+use smithay_client_toolkit::reexports::calloop::channel::Sender;
 use smithay_client_toolkit::seat::keyboard::{KeyEvent, Keysym};
 
 use crate::bar::BarApp;
@@ -10,6 +11,32 @@ use crate::config::KeyHintDef;
 use crate::layout::Elem;
 use crate::mods::{InteractiveModule, KeyResult};
 use crate::pipewire;
+
+pub fn subscribe(
+    params: serde_json::Map<String, Value>,
+    sender: Sender<(String, Value)>,
+    id: String,
+) {
+    let mut last_vol = i64::MIN;
+    let mut last_muted = false;
+    let mut last_denoise = false;
+    loop {
+        pipewire::invalidate();
+        let val = poll(&params);
+        let vol = val.get("volume").and_then(|v| v.as_i64()).unwrap_or(0);
+        let muted = val.get("muted").and_then(|v| v.as_bool()).unwrap_or(false);
+        let denoise = val.get("denoise").and_then(|v| v.as_bool()).unwrap_or(false);
+        if vol != last_vol || muted != last_muted || denoise != last_denoise {
+            last_vol = vol;
+            last_muted = muted;
+            last_denoise = denoise;
+            if sender.send((id.clone(), val)).is_err() {
+                return;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+}
 
 pub fn poll(_params: &serde_json::Map<String, Value>) -> Value {
     let state = pipewire::query();
@@ -83,7 +110,7 @@ fn denoise_config_path() -> std::path::PathBuf {
     std::path::PathBuf::from(cache).join("cyberdeck/denoise.conf")
 }
 
-fn denoise_pid_path() -> std::path::PathBuf {
+pub fn denoise_pid_path() -> std::path::PathBuf {
     let runtime = std::env::var("XDG_RUNTIME_DIR")
         .unwrap_or_else(|_| "/tmp".to_string());
     std::path::PathBuf::from(runtime).join("cyberdeck-denoise.pid")
@@ -132,7 +159,7 @@ fn write_denoise_config(lib_path: &str) -> Option<String> {
     Some(conf_path.to_string_lossy().to_string())
 }
 
-fn toggle_denoise(currently_active: bool) {
+pub fn toggle_denoise(currently_active: bool) {
     if currently_active {
         if let Ok(pid_str) = std::fs::read_to_string(denoise_pid_path()) {
             if let Ok(pid) = pid_str.trim().parse::<i32>() {
