@@ -13,24 +13,22 @@ condition = "{{ brightness < 30 }}"
 [widget]
 template = "{{ brightness | meter(max=100, width=20) }}"
 
-[commands]
-up = "brightnessctl set +10%"
-down = "brightnessctl set 10%-"
+[[actions]]
+name = "up"
+run = "brightnessctl set +10%"
+key = "Up"
+label = "brighter"
+
+[[actions]]
+name = "down"
+run = "brightnessctl set 10%-"
+key = "Down"
+label = "dimmer"
 
 [[hooks]]
 condition = '{{ changed(key="brightness") }}'
 action = "spotlight"
 timeout = 3
-
-[[key-hints]]
-key = "Up"
-action = "brightnessctl set +10%"
-label = "brighter"
-
-[[key-hints]]
-key = "Down"
-action = "brightnessctl set 10%-"
-label = "dimmer"
 
 [[key-hints]]
 key = "Esc"

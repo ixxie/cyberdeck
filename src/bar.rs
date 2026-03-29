@@ -155,7 +155,7 @@ pub struct BarApp {
     pub modifiers: Modifiers,
     pub toasts: Vec<Toast>,
     pub badge_overrides: HashMap<String, RegistrationToken>,
-    pub spotlight_token: Option<RegistrationToken>,
+    pub spotlight_toast_id: Option<u64>,
     pub interactive: HashMap<String, Box<dyn InteractiveModule>>,
     pub nav_changed: Instant,
     pub icon_map: HashMap<String, String>,
@@ -269,7 +269,7 @@ impl BarApp {
             },
             toasts: Vec::new(),
             badge_overrides: HashMap::new(),
-            spotlight_token: None,
+            spotlight_toast_id: None,
             interactive,
             nav_changed: Instant::now(),
             icon_map,
@@ -287,11 +287,6 @@ impl BarApp {
     }
 
     pub fn set_nav(&mut self, nav: NavState) {
-        // Cancel any active spotlight timer
-        if let Some(token) = self.spotlight_token.take() {
-            self.loop_handle.remove(token);
-        }
-
         let needs_kb = !(nav.stack.is_empty() && matches!(nav.mode, DisplayMode::Visual));
         log::info!("nav -> stack={:?} mode={:?} kb={}", nav.stack, nav.mode, needs_kb);
         self.nav = nav;
@@ -580,30 +575,32 @@ impl BarApp {
             Some(m) => m,
             None => return,
         };
-        let mode = if module.has_view() {
-            DisplayMode::Visual
-        } else {
-            return;
-        };
 
-        // Cancel existing spotlight timer if re-triggered
-        if let Some(old) = self.spotlight_token.take() {
-            self.loop_handle.remove(old);
+        let data = self.states.borrow()
+            .get(mod_id)
+            .map(|s| s.data.clone())
+            .unwrap_or(serde_json::Value::Null);
+
+        // Render widget as toast elems
+        let mut elems = Vec::new();
+        if let Some(icon_name) = &module.icon {
+            let icon_text = self.template_engine.render_icon(icon_name);
+            elems.push(crate::layout::Elem::text(icon_text));
+        }
+        if let Some(widget_def) = &module.widget {
+            elems.extend(self.template_engine.render_widget(mod_id, widget_def, &data, None));
         }
 
-        self.set_nav(NavState::module(mod_id, mode));
+        if elems.is_empty() {
+            return;
+        }
 
-        let token = self.loop_handle.insert_source(
-            Timer::from_duration(Duration::from_secs(timeout)),
-            move |_, _, app| {
-                log::info!("spotlight expired");
-                app.spotlight_token = None;
-                app.set_nav(NavState::new());
-                TimeoutAction::Drop
-            },
-        ).expect("failed to set spotlight timer");
-
-        self.spotlight_token = Some(token);
+        // Replace previous spotlight toast
+        if let Some(tid) = self.spotlight_toast_id.take() {
+            self.remove_toast(tid);
+        }
+        let tid = self.set_nav_toast(elems);
+        self.spotlight_toast_id = Some(tid);
     }
 
     fn set_badge_override(&mut self, mod_path: &str, timeout: u64) {
@@ -668,16 +665,20 @@ impl BarApp {
 
         let bar_h = ((renderer.cell_h + 2.0 * pill.padding + 2.0 * track.padding) * output_mul).ceil() as u32;
         let bar_content_w = bar_w - 2.0 * track_pad;
-        let metrics = Metrics {
-            cell_w: renderer.cell_w * output_mul,
-            cell_h: renderer.cell_h * output_mul,
-            scale: bar.scale as f32 * output_mul,
-            icons: &bar.icons,
+        let cell_w = renderer.cell_w * output_mul;
+        let cell_h = renderer.cell_h * output_mul;
+        let scale = bar.scale as f32 * output_mul;
+
+        // Basic metrics for pagination (legacy cell_w estimation)
+        let basic_metrics = Metrics {
+            cell_w, cell_h, scale,
+            elem_widths: Vec::new(), span_widths: Vec::new(),
+            elem_gap: cell_w * 0.5,
         };
 
         let zones: Vec<Zone> = if nav.stack.is_empty() && matches!(nav.mode, DisplayMode::Visual) {
             let icon_h = (renderer.cell_h * bar.scale as f32).ceil() as u32;
-            crate::view::root_zones(config, template_engine, states, pal, output_name, badge_overrides, toasts, gap, pill_bg, icon_h, bar_content_w, &metrics, &pc)
+            crate::view::root_zones(config, template_engine, states, pal, output_name, badge_overrides, toasts, gap, pill_bg, icon_h, bar_content_w, &basic_metrics, &pc)
         } else {
             match nav.mode {
                 DisplayMode::Visual => {
@@ -685,14 +686,17 @@ impl BarApp {
                     crate::view::mod_zones(
                         mod_id, config, template_engine, states, pal, output_name, interactive, gap, pill_bg, &pc,
                     ).unwrap_or_else(|| {
-                        crate::view::text_zones(nav, config, template_engine, states, pal, gap, pill_bg, bar_content_w, &metrics, &pc)
+                        crate::view::text_zones(nav, config, template_engine, states, pal, gap, pill_bg, bar_content_w, &basic_metrics, &pc)
                     })
                 }
                 DisplayMode::Text => {
-                    crate::view::text_zones(nav, config, template_engine, states, pal, gap, pill_bg, bar_content_w, &metrics, &pc)
+                    crate::view::text_zones(nav, config, template_engine, states, pal, gap, pill_bg, bar_content_w, &basic_metrics, &pc)
                 }
             }
         };
+
+        // Accurate measurement using font shaping
+        let metrics = Metrics::measure(&zones, cell_w, cell_h, scale, output_mul, renderer, &bar.icons);
         let mut frame = lay(&zones, bar_w, bar_h as f32, track_pad, &metrics);
 
         // Nav transition: ease-in over 300ms

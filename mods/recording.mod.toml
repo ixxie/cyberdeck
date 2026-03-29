@@ -1,0 +1,41 @@
+name = "Recording"
+icon = "record"
+type = "recording"
+
+[source]
+type = "native"
+kind = "recording"
+interval = 1
+
+[badges.default]
+template = '{{ "record" | icon }} rec'
+condition = "{{ recording }}"
+highlight = "{{ recording }}"
+
+[widget]
+template = '{% if recording %}recording...{% else %}screen recording{% endif %}'
+
+[[actions]]
+name = "start"
+run = "native"
+label = "record"
+
+[[actions]]
+name = "stop"
+run = "native"
+label = "stop"
+
+[[actions]]
+name = "toggle-audio"
+run = "native"
+label = "toggle audio"
+
+[[actions]]
+name = "toggle-mic"
+run = "native"
+label = "toggle mic"
+
+[[key-hints]]
+key = "Esc"
+action = "back"
+label = "back"

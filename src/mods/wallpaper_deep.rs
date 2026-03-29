@@ -8,11 +8,15 @@ use crate::mods::{InteractiveModule, KeyResult};
 
 pub struct WallpaperDeep {
     cursor: usize,
+    params: serde_json::Map<String, serde_json::Value>,
 }
 
 impl WallpaperDeep {
-    pub fn new() -> Self {
-        Self { cursor: 0 }
+    pub fn new(module: &crate::config::ModuleDef) -> Self {
+        let params = module.params.iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        Self { cursor: 0, params }
     }
 
     fn group_names(data: &serde_json::Value) -> Vec<String> {
@@ -103,5 +107,20 @@ impl InteractiveModule for WallpaperDeep {
 
     fn reset(&mut self) {
         self.cursor = 0;
+    }
+
+    fn exec_action(&mut self, name: &str, args: &[String], _data: &serde_json::Value) -> Option<String> {
+        match name {
+            "shuffle" => {
+                let group = args.first().map(|s| s.as_str());
+                crate::mods::wallpaper::shuffle(&self.params, group);
+                Some("shuffled".into())
+            }
+            "init" => {
+                crate::mods::wallpaper::init(&self.params);
+                Some("initialized".into())
+            }
+            _ => None,
+        }
     }
 }

@@ -58,6 +58,71 @@ impl Renderer {
         }
     }
 
+    /// Shape text and return its rendered width at the given scale.
+    /// Handles icon chars (measured from pixmaps) and text runs (shaped by cosmic-text).
+    pub fn measure_text(&mut self, text: &str, icons: &IconSet, scale: f32, font_scale: f32) -> f32 {
+        let font_size = self.font_size * font_scale;
+        let cell_h = self.cell_h * font_scale;
+        let mut total_w = 0.0;
+
+        // Split into runs (same logic as render_frame's character walk)
+        let mut run = String::new();
+        let mut run_is_emoji = false;
+
+        for ch in text.chars() {
+            if ch == '\x01' || ch == '\x02' { continue; }
+
+            if IconSet::is_icon_char(ch) {
+                // Flush text run
+                if !run.is_empty() {
+                    total_w += self.shape_width(&run, font_size, cell_h, run_is_emoji);
+                    run.clear();
+                }
+                // Icon width from pixmap
+                if let Some(pm) = icons.icon_for_char(ch) {
+                    total_w += pm.width() as f32 / scale;
+                }
+            } else {
+                let ch_emoji = is_emoji(ch);
+                if !run.is_empty() && ch_emoji != run_is_emoji {
+                    total_w += self.shape_width(&run, font_size, cell_h, run_is_emoji);
+                    run.clear();
+                }
+                if run.is_empty() {
+                    run_is_emoji = ch_emoji;
+                }
+                run.push(ch);
+            }
+        }
+        if !run.is_empty() {
+            total_w += self.shape_width(&run, font_size, cell_h, run_is_emoji);
+        }
+
+        total_w
+    }
+
+    /// Shape a text run and return its width (using the shared cache)
+    fn shape_width(&mut self, text: &str, font_size: f32, cell_h: f32, emoji: bool) -> f32 {
+        if text.is_empty() { return 0.0; }
+        let scale_key = (font_size * 100.0) as i32;
+        let buf = self.shaped_cache.entry((text.to_string(), scale_key, emoji)).or_insert_with(|| {
+            let metrics = Metrics::new(font_size, cell_h);
+            let mut buf = Buffer::new(&mut self.font_system, metrics);
+            let family = if emoji {
+                Family::Name(&self.emoji_font)
+            } else {
+                Family::Name(&self.font_family)
+            };
+            {
+                let mut borrowed = buf.borrow_with(&mut self.font_system);
+                borrowed.set_text(text, Attrs::new().family(family), Shaping::Advanced);
+                borrowed.shape_until_scroll(true);
+            }
+            buf
+        });
+        buf.layout_runs().flat_map(|run| run.glyphs.iter()).map(|g| g.w).sum()
+    }
+
     pub fn bar_height(&self, settings: &crate::config::Settings) -> u32 {
         let track = settings.resolve_track();
         let pill = settings.resolve_pill();
@@ -118,9 +183,14 @@ impl Renderer {
             // Text y centered within span
             let text_y = span_y + (span_h - cell_h) / 2.0;
 
+            let bar_right = w as f32;
+
             for felem in &fspan.elems {
                 let elem_x = felem.rect.x * sf;
                 let elem_y = text_y;
+
+                // Skip elems outside the visible bar area
+                if elem_x >= bar_right || elem_x + felem.rect.w * sf <= 0.0 { continue; }
 
                 let mut fg = felem.fg;
                 fg.a = (fg.a as f32 * span_opacity) as u8;
@@ -137,7 +207,7 @@ impl Renderer {
                         pixmap.data_mut(), w, h,
                         icon_pm, cx.round() as i32, dy.round() as i32, fg,
                     );
-                    cx += icon_w + cell_w * 0.5;
+                    cx += icon_w + cell_w;
                 }
 
                 // Walk text characters

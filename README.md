@@ -3,28 +3,17 @@
 
 # `> cyberdeck`
 
-A desktop shell for cyberpunks, on Niri on NixOS.
+A desktop shell for cyberpunks. Wayland-native, built for Niri, runs on any Linux distro.
 
 Philosophy:
 
 - *streamlined* - all you need, nothing you don't
 - *ergonomic* - first-class keyboard support
+- *isomorphic* - GUI, CLI & keybinding parity
 - *focused* - stays out of your way
 - *turnkey* - doesn't take weeks to config
 
 ![desktop](screenshots/desktop.png)
-
-When **idle** the bar tries to show as little clutter as possible:
-
-![bar idle](screenshots/bar-idle.png)
-
-When **activated** you get a module menu:
-
-![bar with badges](screenshots/bar-badges.png)
-
-This is also a **launcher** and will find apps when you type:
-
-![bar launcher](screenshots/bar-launcher.png)
 
 ## Modules
 
@@ -45,7 +34,8 @@ This is also a **launcher** and will find apps when you type:
 | session | Battery, suspend, shutdown, reboot, logout | upower |
 | profiles | Power profiles (saver/balanced/performance) | power-profiles-daemon |
 | weather | Temperature, humidity, conditions from wttr.in | curl |
-| snip | Region/screen screenshot, screen recording | grim, slurp, wl-clipboard, wl-screenrec |
+| screenshot | Region or full-screen screenshot to clipboard | grim, slurp, wl-clipboard |
+| recording | Screen recording with audio options | slurp, wl-screenrec |
 | wallpaper | Wallpaper cycling via swww | swww |
 | keyboard | Layout indicator, cycle layouts | swaymsg |
 | clipboard | Clipboard history, paste, clear | wl-clipboard, cliphist |
@@ -64,7 +54,7 @@ Vision: all you need to work is Niri + Cyberdeck.
 
 ### Prerequisites
 
-- A Wayland compositor (Niri officially supported, others may work)
+- Niri compositor (hardcoded IPC for window/workspace/app-launch)
 - Linux with systemd
 
 ### Install (any distro)
@@ -124,7 +114,8 @@ Import the NixOS module and enable modules:
         location = "London";
       };
       storage.enable = true;
-      snip.enable = true;
+      screenshot.enable = true;
+      recording.enable = true;
       wallpaper = {
         enable = true;
         dir = "~/Pictures/wallpapers";
@@ -255,14 +246,14 @@ Hook actions:
 The bar exposes a Unix socket at `$XDG_RUNTIME_DIR/cyberdeck.sock`. Commands:
 
 ```sh
-cyberdeck launcher       # toggle the launcher
-cyberdeck push <module>  # navigate to a module
-cyberdeck run <mod> <key> # run a module's key-hint action
-cyberdeck state          # get current navigation state
-cyberdeck dismiss        # reset to root
+cyberdeck launcher            # toggle the launcher
+cyberdeck <module> <action>   # run a module action
+cyberdeck <module> open       # navigate to a module
+cyberdeck state               # get current navigation state
+cyberdeck dismiss             # reset to root
 ```
 
-Use `cyberdeck run` in compositor keybindings for volume/brightness control with instant feedback.
+Use `cyberdeck <module> <action>` in compositor keybindings for volume/brightness control with instant feedback.
 
 ## Developing
 

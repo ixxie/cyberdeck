@@ -14,11 +14,25 @@ condition = "{{ muted }}"
 [widget]
 template = '{% if muted %}muted{% else %}{{ volume | meter(max=100, width=20) }}{% endif %}'
 
-[commands]
-mute = "wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle"
-up = "wpctl set-volume @DEFAULT_AUDIO_SOURCE@ 5%+"
-down = "wpctl set-volume @DEFAULT_AUDIO_SOURCE@ 5%-"
-denoise = "cyberdeck inputs denoise"
+[[actions]]
+name = "mute"
+run = "wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle"
+label = "mute"
+
+[[actions]]
+name = "up"
+run = "wpctl set-volume @DEFAULT_AUDIO_SOURCE@ 5%+"
+label = "vol up"
+
+[[actions]]
+name = "down"
+run = "wpctl set-volume @DEFAULT_AUDIO_SOURCE@ 5%-"
+label = "vol down"
+
+[[actions]]
+name = "denoise"
+run = "native"
+label = "denoise"
 
 [[hooks]]
 condition = '{{ changed(key="muted") }}'

@@ -179,6 +179,26 @@ impl TemplateEngine {
             }
         });
 
+        tera.register_filter("sparkline", |value: &Value, _args: &HashMap<String, Value>| {
+            let blocks = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+            let vals: Vec<f64> = value.as_array()
+                .map(|arr| arr.iter().filter_map(|v| v.as_f64()).collect())
+                .unwrap_or_default();
+            if vals.is_empty() {
+                return Ok(Value::String(String::new()));
+            }
+            let max = vals.iter().cloned().fold(0.0f64, f64::max);
+            let result: String = vals.iter().map(|&v| {
+                if max <= 0.0 {
+                    blocks[0]
+                } else {
+                    let idx = ((v / max) * 7.0).round() as usize;
+                    blocks[idx.min(7)]
+                }
+            }).collect();
+            Ok(Value::String(result))
+        });
+
         tera.register_filter("color", |value: &Value, _args: &HashMap<String, Value>| {
             Ok(value.clone())
         });
@@ -272,7 +292,7 @@ impl TemplateEngine {
         widget: &WidgetDef,
         data: &serde_json::Value,
         output_name: Option<&str>,
-    ) -> Option<Elem> {
+    ) -> Vec<Elem> {
         if widget.condition.is_some() {
             let cond_name = format!("{path}.widget.__cond");
             let mut ctx = Context::from_value(data.clone()).unwrap_or_default();
@@ -280,7 +300,7 @@ impl TemplateEngine {
             let rendered = self.tera.render(&cond_name, &ctx).unwrap_or_default();
             let trimmed = rendered.trim();
             if trimmed.is_empty() || trimmed == "false" || trimmed == "0" {
-                return None;
+                return Vec::new();
             }
         }
 
@@ -288,10 +308,14 @@ impl TemplateEngine {
         let mut ctx = Context::from_value(data.clone()).unwrap_or_default();
         ctx.insert("__output", &output_name.unwrap_or(""));
         match self.tera.render(&name, &ctx) {
-            Ok(text) => Some(Elem::text(text)),
+            Ok(text) => text.split("|||")
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .map(|s| Elem::text(s.to_string()))
+                .collect(),
             Err(e) => {
                 log::error!("template render error {name}: {e}");
-                None
+                Vec::new()
             }
         }
     }

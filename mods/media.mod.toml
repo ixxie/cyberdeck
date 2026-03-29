@@ -14,10 +14,20 @@ condition = '{{ status == "Playing" }}'
 [widget]
 template = '{% if title %}{{ title }}{% if artist %} — {{ artist }}{% endif %}{% else %}no media{% endif %}'
 
-[commands]
-play = "playerctl play-pause"
-prev = "playerctl previous"
-next = "playerctl next"
+[[actions]]
+name = "play"
+run = "playerctl play-pause"
+label = "play/pause"
+
+[[actions]]
+name = "prev"
+run = "playerctl previous"
+label = "prev"
+
+[[actions]]
+name = "next"
+run = "playerctl next"
+label = "next"
 
 [[key-hints]]
 key = "p"

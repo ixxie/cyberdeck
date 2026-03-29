@@ -189,13 +189,36 @@ pub struct ModuleDef {
     #[serde(default, flatten)]
     pub params: HashMap<String, serde_json::Value>,
     #[serde(default)]
-    pub commands: HashMap<String, String>,
+    pub actions: Vec<ActionDef>,
 }
 
 impl ModuleDef {
     pub fn has_view(&self) -> bool {
-        self.widget.is_some() || self.module_type.is_some() || !self.key_hints.is_empty()
+        self.widget.is_some() || self.module_type.is_some()
+            || !self.key_hints.is_empty() || !self.actions.is_empty()
     }
+
+    pub fn action_by_name(&self, name: &str) -> Option<&ActionDef> {
+        self.actions.iter().find(|a| a.name == name)
+    }
+
+    pub fn action_by_key(&self, key: &str) -> Option<&ActionDef> {
+        self.actions.iter().find(|a| a.key.as_deref() == Some(key))
+    }
+}
+
+// --- Actions ---
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct ActionDef {
+    pub name: String,
+    pub run: String,
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub key: Option<String>,
+    #[serde(default)]
+    pub icon: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -520,7 +543,7 @@ impl Default for ModuleDef {
             key_hints: Vec::new(),
             module_type: None,
             params: HashMap::new(),
-            commands: HashMap::new(),
+            actions: Vec::new(),
         }
     }
 }

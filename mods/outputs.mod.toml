@@ -14,10 +14,20 @@ condition = "{{ muted }}"
 [widget]
 template = '{% if muted %}muted{% else %}{{ volume | meter(max=100, width=20) }}{% endif %}'
 
-[commands]
-up = "wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%+"
-down = "wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-"
-mute = "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle"
+[[actions]]
+name = "up"
+run = "wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%+"
+label = "vol up"
+
+[[actions]]
+name = "down"
+run = "wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-"
+label = "vol down"
+
+[[actions]]
+name = "mute"
+run = "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle"
+label = "mute"
 
 [[hooks]]
 condition = '{{ changed(key="volume") or changed(key="muted") }}'

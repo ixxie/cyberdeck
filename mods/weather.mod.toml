@@ -7,11 +7,11 @@ kind = "weather"
 interval = 600
 
 [badges.default]
-template = '{% if code == 113 %}{{ "sun" | icon }}{% elif code == 116 or code == 119 or code == 122 %}{{ "cloud" | icon }}{% else %}{{ "cloud" | icon }}{% endif %}'
-condition = "{{ code > 200 or temp_c > 35 or temp_c < 0 or wind_kph > 50 }}"
+template = '{{ weather_icon | icon }}'
+condition = "{{ code >= 51 or temp_c > 35 or temp_c < 0 or wind_kph > 50 }}"
 
 [widget]
-template = '{% if location %}{{ location }}  {% endif %}{{ desc }}  {{ temp_c }}°C ({{ feels_like_c }}°C)  humidity {{ humidity }}%'
+template = '{{ weather_icon | icon }} {{ weather_label }}|||{{ temp_icon | icon }} {{ temp_c }}°C ({{ feels_like_c }}°C)|||{{ "drop" | icon }} {{ humidity }}%|||{{ "wind" | icon }} {{ wind_kph }} km/h{% if rainfall_max > 0 %}|||{{ "cloud-rain" | icon }} {{ rainfall | sparkline }} {{ rainfall_max }}mm{% endif %}{% if location %}|||{{ "map-pin" | icon }} {{ location }}{% endif %}'
 
 [[key-hints]]
 key = "Esc"

@@ -15,11 +15,25 @@ condition = "{{ devices | selectattr('connected', 'true') | list | length > 0 }}
 template = '''
 {% if not powered %}off{% elif devices | length == 0 %}no devices{% else %}{% for d in devices %}{% if d.connected %}{{ d.name }}{% else %}{{ d.name | dim }}{% endif %}{% if not loop.last %}  {% endif %}{% endfor %}{% endif %}'''
 
-[commands]
-on = "bluetoothctl power on"
-off = "bluetoothctl power off"
-connect = "bluetoothctl connect"
-disconnect = "bluetoothctl disconnect"
+[[actions]]
+name = "on"
+run = "bluetoothctl power on"
+label = "power on"
+
+[[actions]]
+name = "off"
+run = "bluetoothctl power off"
+label = "power off"
+
+[[actions]]
+name = "connect"
+run = "bluetoothctl connect"
+label = "connect"
+
+[[actions]]
+name = "disconnect"
+run = "bluetoothctl disconnect"
+label = "disconnect"
 
 [[key-hints]]
 key = "Esc"

@@ -166,7 +166,9 @@ pub(crate) fn root_zones(
         let opacity = crate::bar::toast_opacity(t);
         if !t.elems.is_empty() {
             // Structured toast (nav indicators): each elem is its own item in the pill
-            let elems = t.elems.clone();
+            let elems: Vec<Elem> = t.elems.iter().cloned().map(|e| {
+                if e.fg == Rgba::default() { e.fg(toast_fg) } else { e }
+            }).collect();
             center_spans.push(pill_bright(elems, bg, pc).opacity(opacity));
         } else {
             let text = if t.text.len() > 80 {
@@ -275,15 +277,16 @@ pub(crate) fn mod_zones(
         .map(|s| &s.data)
         .unwrap_or(&serde_json::Value::Null);
 
-    let mut content = Vec::new();
+    let mut center_spans = Vec::new();
     if let Some(widget_def) = &module.widget {
-        if let Some(elem) = template_engine.render_widget(id, widget_def, data, output_name) {
-            content.push(elem.fg(pal.active));
+        let elems = template_engine.render_widget(id, widget_def, data, output_name);
+        for elem in elems {
+            center_spans.push(pill(vec![elem.fg(pal.active)], bg, pc));
         }
     }
 
     // Show module view if has widget OR has key-hints
-    if content.is_empty() && module.key_hints.is_empty() {
+    if center_spans.is_empty() && module.key_hints.is_empty() {
         return None;
     }
 
@@ -306,7 +309,7 @@ pub(crate) fn mod_zones(
 
     Some(vec![
         Zone::left(vec![pill(breadcrumb, bg, pc).path("__back")], gap),
-        Zone::center(vec![pill(content, bg, pc)], gap),
+        Zone::center(center_spans, gap),
         Zone::right(vec![pill(hints, bg, pc)], gap),
     ])
 }

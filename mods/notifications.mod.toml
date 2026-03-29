@@ -14,8 +14,10 @@ condition = "{{ count > 0 }}"
 [widget]
 template = '{% if count == 0 %}no notifications{% elif count == 1 %}1 notification{% else %}{{ count }} notifications{% endif %}'
 
-[commands]
-clear = "cyberdeck notifications clear"
+[[actions]]
+name = "clear"
+run = "native"
+label = "clear"
 
 [[key-hints]]
 key = "←→"

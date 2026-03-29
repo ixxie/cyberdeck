@@ -75,38 +75,54 @@ impl BarApp {
                     .map(|s| s.data.clone())
                     .unwrap_or(serde_json::Value::Null);
                 let result = deep.handle_key(&event, &data);
-                if result != crate::mods::KeyResult::Ignored {
-                    if result == crate::mods::KeyResult::Action {
-                        self.source_mgr.nudge(&mod_id);
+                match &result {
+                    crate::mods::KeyResult::Ignored => {}
+                    crate::mods::KeyResult::Handled => {
+                        self.dirty.set(true);
+                        return;
                     }
-                    self.dirty.set(true);
-                    return;
+                    crate::mods::KeyResult::Action => {
+                        self.source_mgr.nudge(&mod_id);
+                        self.dirty.set(true);
+                        return;
+                    }
+                    crate::mods::KeyResult::Dismiss(toast) => {
+                        self.source_mgr.nudge(&mod_id);
+                        let icon = self.config.bar.modules.get(&mod_id)
+                            .and_then(|m| m.icon.clone());
+                        self.set_toast(toast, icon, 3);
+                        self.set_nav(NavState::new());
+                        return;
+                    }
                 }
             }
         }
 
-        // Key hint actions
+        // Action dispatch by key binding
         if let Some(module) = self.current_module() {
             let key_name = Self::event_key_name(&event);
-            if let Some(key_name) = key_name {
-                let matched = module.key_hints.iter()
-                    .find(|h| h.key == key_name)
-                    .map(|h| h.action.clone());
-                if let Some(action) = matched {
-                    if action == "back" {
-                        self.set_nav(NavState::new());
-                    } else {
-                        Self::spawn_command(&action);
-                        if let Some(mod_id) = self.nav.stack.first().cloned() {
-                            self.source_mgr.nudge(&mod_id);
-                            let icon = self.config.bar.modules.get(&mod_id)
-                                .and_then(|m| m.icon.clone());
-                            let name = self.config.bar.modules.get(&mod_id)
-                                .map(|m| m.name.clone())
-                                .unwrap_or_default();
-                            self.set_toast(&name, icon, 3);
-                        }
+            if let Some(ref key_name) = key_name {
+                // Try [[actions]] first
+                if let Some(act) = module.action_by_key(key_name) {
+                    if act.run != "native" {
+                        Self::spawn_command(&act.run);
                     }
+                    if let Some(mod_id) = self.nav.stack.first().cloned() {
+                        self.source_mgr.nudge(&mod_id);
+                        let icon = self.config.bar.modules.get(&mod_id)
+                            .and_then(|m| m.icon.clone());
+                        let label = if act.label.is_empty() { act.name.clone() } else { act.label.clone() };
+                        self.set_toast(&label, icon, 3);
+                    }
+                    self.set_nav(NavState::new());
+                    return;
+                }
+
+                // Key-hints: only "back" action remains
+                let is_back = module.key_hints.iter()
+                    .any(|h| h.key == *key_name && h.action == "back");
+                if is_back {
+                    self.set_nav(NavState::new());
                     return;
                 }
             }

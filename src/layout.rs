@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
 use taffy::prelude::*;
+use taffy::style::Overflow;
+use taffy::geometry::Point as TaffyPoint;
 use tiny_skia::Pixmap;
 use unicode_width::UnicodeWidthChar;
 
@@ -155,53 +157,90 @@ impl Frame {
 
 // === Measurement ===
 
-pub struct Metrics<'a> {
+pub struct Metrics {
     pub cell_w: f32,
     pub cell_h: f32,
     pub scale: f32,
-    pub icons: &'a IconSet,
+    pub elem_widths: Vec<f32>,
+    pub span_widths: Vec<f32>,
+    pub elem_gap: f32,
 }
 
-impl<'a> Metrics<'a> {
-    pub fn text_w(&self, text: &str) -> f32 {
-        let mut w = 0.0;
-        for ch in text.chars() {
-            if ch == '\x01' || ch == '\x02' {
-                continue;
-            }
-            if IconSet::is_icon_char(ch) {
-                if let Some(pm) = self.icons.icon_for_char(ch) {
-                    w += pm.width() as f32 / self.scale;
-                } else {
-                    w += self.cell_w;
+impl Metrics {
+    /// Measure all zones up front using the renderer's font shaping.
+    /// After this, all widths are cached and no &mut Renderer is needed.
+    pub fn measure(
+        zones: &[Zone],
+        cell_w: f32,
+        cell_h: f32,
+        scale: f32,
+        font_scale: f32,
+        renderer: &mut crate::render::Renderer,
+        icons: &IconSet,
+    ) -> Self {
+        let elem_gap = cell_w * 0.5;
+        let mut elem_widths = Vec::new();
+        let mut span_widths = Vec::new();
+
+        for zone in zones {
+            for span in &zone.spans {
+                let n = span.elems.len();
+                let mut content_w = 0.0;
+                for elem in &span.elems {
+                    let icon_gap = cell_w;
+                    let icon_w = elem.icon.as_ref()
+                        .map(|pm| pm.width() as f32 / scale + icon_gap)
+                        .unwrap_or(0.0);
+                    let text_w = renderer.measure_text(&elem.text, icons, scale, font_scale);
+                    let ew = icon_w + text_w;
+                    elem_widths.push(ew);
+                    content_w += ew;
                 }
-            } else {
-                w += self.cell_w * ch.width().unwrap_or(1) as f32;
+                let gaps = n.saturating_sub(1) as f32 * elem_gap;
+                let sw = if n == 0 { 0.0 } else { content_w + gaps + 2.0 * span.pad_x };
+                span_widths.push(sw);
             }
         }
-        w
+
+        Self { cell_w, cell_h, scale, elem_widths, span_widths, elem_gap }
+    }
+
+    /// Get pre-measured elem width by flat index
+    pub fn elem_w_at(&self, idx: usize) -> f32 {
+        self.elem_widths.get(idx).copied().unwrap_or(0.0)
+    }
+
+    /// Get pre-measured span width by flat index
+    pub fn span_w_at(&self, idx: usize) -> f32 {
+        self.span_widths.get(idx).copied().unwrap_or(0.0)
     }
 
     pub fn icon_w(&self, pm: &Pixmap) -> f32 {
         pm.width() as f32 / self.scale
     }
 
-    pub fn elem_gap(&self) -> f32 { self.cell_w * 0.5 }
-
-    pub fn elem_w(&self, elem: &Elem) -> f32 {
-        let icon_w = elem.icon.as_ref()
-            .map(|pm| self.icon_w(pm) + self.elem_gap())
-            .unwrap_or(0.0);
-        icon_w + self.text_w(&elem.text)
-    }
-
+    // Legacy measurement for pagination (view.rs still uses these)
     pub fn span_w(&self, span: &Span) -> f32 {
+        // Fallback: use cell_w estimation for spans not in the pre-measured set
         let n = span.elems.len();
-        if n == 0 {
-            return 0.0;
-        }
-        let content: f32 = span.elems.iter().map(|e| self.elem_w(e)).sum();
-        let gaps = (n.saturating_sub(1)) as f32 * self.elem_gap();
+        if n == 0 { return 0.0; }
+        let content: f32 = span.elems.iter().map(|e| {
+            let icon_gap = self.cell_w;
+            let icon_w = e.icon.as_ref()
+                .map(|pm| self.icon_w(pm) + icon_gap)
+                .unwrap_or(0.0);
+            let text_w: f32 = e.text.chars()
+                .filter(|&c| c != '\x01' && c != '\x02')
+                .map(|c| {
+                    if IconSet::is_icon_char(c) {
+                        self.cell_w // fallback for unmeasured
+                    } else {
+                        self.cell_w * c.width().unwrap_or(1) as f32
+                    }
+                }).sum();
+            icon_w + text_w
+        }).sum();
+        let gaps = n.saturating_sub(1) as f32 * self.elem_gap;
         content + gaps + 2.0 * span.pad_x
     }
 }
@@ -214,9 +253,8 @@ fn length(v: f32) -> LengthPercentage {
 
 pub fn lay(zones: &[Zone], bar_w: f32, bar_h: f32, track_pad: f32, m: &Metrics) -> Frame {
     let mut tree = TaffyTree::<()>::new();
-    let elem_gap = m.elem_gap();
+    let elem_gap = m.elem_gap;
 
-    // Track (zone_idx, span_idx, elem_idx) → taffy node for reading back positions
     struct SpanInfo {
         node: NodeId,
         span_idx: usize,
@@ -224,33 +262,39 @@ pub fn lay(zones: &[Zone], bar_w: f32, bar_h: f32, track_pad: f32, m: &Metrics) 
         elem_nodes: Vec<NodeId>,
     }
     let mut span_infos: Vec<SpanInfo> = Vec::new();
-
     let mut zone_nodes = Vec::new();
+    let mut elem_idx = 0usize;
 
     for (zi, zone) in zones.iter().enumerate() {
         let mut span_nodes = Vec::new();
 
         for (si, span) in zone.spans.iter().enumerate() {
-            // Elem leaves
             let mut elem_nodes = Vec::new();
-            for elem in &span.elems {
-                let ew = m.elem_w(elem);
+            for _elem in &span.elems {
+                let ew = m.elem_w_at(elem_idx);
+                elem_idx += 1;
                 let node = tree.new_leaf(Style {
                     size: Size {
                         width: Dimension::Length(ew),
                         height: Dimension::Length(m.cell_h),
                     },
+                    flex_shrink: 1.0,
                     ..Default::default()
                 }).unwrap();
                 elem_nodes.push(node);
             }
 
-            // Span container: row, padding, gap between elems
+            // Span container: row, padding, gap between elems, shrinkable
             let span_node = tree.new_with_children(
                 Style {
                     display: Display::Flex,
                     flex_direction: FlexDirection::Row,
                     align_items: Some(AlignItems::Center),
+                    flex_shrink: 1.0,
+                    overflow: TaffyPoint {
+                        x: Overflow::Hidden,
+                        y: Overflow::Hidden,
+                    },
                     padding: taffy::prelude::Rect {
                         left: length(span.pad_x),
                         right: length(span.pad_x),
@@ -288,7 +332,10 @@ pub fn lay(zones: &[Zone], bar_w: f32, bar_h: f32, track_pad: f32, m: &Metrics) 
                 flex_direction: FlexDirection::Row,
                 justify_content: Some(justify),
                 align_items: Some(AlignItems::Center),
-                // Zone is absolutely positioned to overlay with other zones
+                overflow: TaffyPoint {
+                    x: Overflow::Hidden,
+                    y: Overflow::Hidden,
+                },
                 position: Position::Absolute,
                 inset: taffy::prelude::Rect {
                     left: LengthPercentageAuto::Length(0.0),

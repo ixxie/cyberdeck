@@ -13,14 +13,16 @@ fill = "crop"
 transition = "fade"
 transition-duration = "1"
 
-[commands]
-shuffle = "cyberdeck wallpaper shuffle"
-init = "cyberdeck wallpaper init"
-
-[[key-hints]]
+[[actions]]
+name = "shuffle"
+run = "native"
 key = "s"
-action = "cyberdeck wallpaper shuffle"
 label = "shuffle"
+
+[[actions]]
+name = "init"
+run = "native"
+label = "init"
 
 [[key-hints]]
 key = "Esc"

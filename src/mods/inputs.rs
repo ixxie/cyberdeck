@@ -168,21 +168,6 @@ fn toggle_denoise(currently_active: bool) {
     }
 }
 
-pub fn cli_toggle_denoise() {
-    let active = denoise_pid_path().exists()
-        && std::fs::read_to_string(denoise_pid_path())
-            .ok()
-            .and_then(|s| s.trim().parse::<i32>().ok())
-            .map(|pid| unsafe { libc::kill(pid, 0) } == 0)
-            .unwrap_or(false);
-    toggle_denoise(active);
-    if active {
-        eprintln!("denoise disabled");
-    } else {
-        eprintln!("denoise enabled");
-    }
-}
-
 // --- Deep module ---
 
 pub struct InputsDeep {
@@ -324,5 +309,18 @@ impl InteractiveModule for InputsDeep {
 
     fn reset(&mut self) {
         self.cursor = 0;
+    }
+
+    fn exec_action(&mut self, name: &str, _args: &[String], data: &serde_json::Value) -> Option<String> {
+        match name {
+            "denoise" => {
+                let active = data.get("denoise").and_then(|v| v.as_bool()).unwrap_or(false);
+                toggle_denoise(active);
+                pipewire::invalidate();
+                let state = if active { "disabled" } else { "enabled" };
+                Some(format!("denoise {state}"))
+            }
+            _ => None,
+        }
     }
 }

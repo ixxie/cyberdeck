@@ -35,9 +35,9 @@ pub fn discover(icons_dir: Option<&str>) -> HashMap<String, String> {
     }
     names.sort();
 
-    let pua_range = PUA_END - PUA_START;
-    names.iter().filter_map(|name| {
-        let cp = PUA_START + (hash_name(name) % pua_range);
+    names.iter().enumerate().filter_map(|(i, name)| {
+        let cp = PUA_START + i as u32;
+        if cp > PUA_END { return None; }
         char::from_u32(cp).map(|ch| (name.clone(), ch.to_string()))
     }).collect()
 }
@@ -50,16 +50,6 @@ fn strip_weight_suffix(name: &str) -> String {
         }
     }
     name.to_string()
-}
-
-fn hash_name(name: &str) -> u32 {
-    // FNV-1a 32-bit
-    let mut h: u32 = 0x811c9dc5;
-    for b in name.bytes() {
-        h ^= b as u32;
-        h = h.wrapping_mul(0x01000193);
-    }
-    h
 }
 
 pub struct IconSet {

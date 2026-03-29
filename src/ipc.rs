@@ -23,14 +23,14 @@ pub enum IpcRequest {
     Navigate { path: Vec<String> },
     #[serde(rename = "state")]
     State,
-    #[serde(rename = "run")]
-    Run { module: String, hint_key: String },
     #[serde(rename = "type")]
     Type { text: String },
     #[serde(rename = "key")]
     Key { key: String },
     #[serde(rename = "style")]
     SetStyle { style: String },
+    #[serde(rename = "action")]
+    Action { module: String, action: String, #[serde(default)] args: Vec<String> },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -177,25 +177,6 @@ fn dispatch(req: IpcRequest, app: &mut BarApp) -> IpcResponse {
             }
         }
         IpcRequest::State => state_response(app),
-        IpcRequest::Run { module, hint_key } => {
-            if let Some(m) = app.config.bar.modules.get(&module) {
-                if let Some(hint) = m.key_hints.iter().find(|h| h.key == hint_key) {
-                    if hint.action != "back" {
-                        BarApp::spawn_command(&hint.action);
-                        app.source_mgr.nudge(&module);
-                        let icon = m.icon.clone();
-                        let name = m.name.clone();
-                        app.set_toast(&name, icon, 3);
-                    }
-                    app.dirty.set(true);
-                    state_response(app)
-                } else {
-                    IpcResponse::err(&format!("unknown key-hint '{hint_key}' in module '{module}'"))
-                }
-            } else {
-                IpcResponse::err(&format!("unknown module: {module}"))
-            }
-        }
         IpcRequest::Type { text } => {
             if !matches!(app.nav.mode, DisplayMode::Text) {
                 return IpcResponse::err("not in text mode");
@@ -209,6 +190,40 @@ fn dispatch(req: IpcRequest, app: &mut BarApp) -> IpcResponse {
             let event = build_key_event(&key);
             app.handle_key(event);
             state_response(app)
+        }
+        IpcRequest::Action { module, action, args } => {
+            let Some(m) = app.config.bar.modules.get(&module) else {
+                return IpcResponse::err(&format!("unknown module: {module}"));
+            };
+            let icon = m.icon.clone();
+            let name = m.name.clone();
+
+            // Try deep module exec_action first
+            if let Some(deep) = app.interactive.get_mut(&module) {
+                let data = app.states.borrow()
+                    .get(&module)
+                    .map(|s| s.data.clone())
+                    .unwrap_or(serde_json::Value::Null);
+                if let Some(toast) = deep.exec_action(&action, &args, &data) {
+                    app.source_mgr.nudge(&module);
+                    app.set_toast(&toast, icon, 3);
+                    app.dirty.set(true);
+                    return state_response(app);
+                }
+            }
+
+            // Fall back to action's run field
+            if let Some(act) = m.action_by_name(&action) {
+                if act.run != "native" {
+                    BarApp::spawn_command(&act.run);
+                    app.source_mgr.nudge(&module);
+                    app.set_toast(&name, icon, 3);
+                    app.dirty.set(true);
+                    return state_response(app);
+                }
+            }
+
+            IpcResponse::err(&format!("unknown action '{action}' in module '{module}'"))
         }
         IpcRequest::SetStyle { style } => {
             match style.as_str() {

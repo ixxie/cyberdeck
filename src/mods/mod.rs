@@ -9,7 +9,7 @@ mod launcher;
 mod network;
 mod notifications;
 mod session;
-mod snip;
+mod recording;
 mod storage;
 mod system;
 mod calendar;
@@ -72,7 +72,7 @@ pub fn register<D: 'static>(
         "window" => window::poll,
         "workspaces" => workspaces::poll,
         "wallpaper" => wallpaper::poll,
-        "snip" => snip::poll,
+        "recording" => recording::poll,
         other => {
             log::error!("unknown native source kind: {other}");
             return None;
@@ -113,11 +113,12 @@ pub fn register<D: 'static>(
 
 // --- Deep Module trait ---
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum KeyResult {
     Ignored,
     Handled,
     Action,
+    Dismiss(String),
 }
 
 pub trait InteractiveModule {
@@ -128,6 +129,11 @@ pub trait InteractiveModule {
     fn key_hints(&self) -> Vec<KeyHintDef>;
     fn handle_key(&mut self, event: &KeyEvent, data: &serde_json::Value) -> KeyResult;
     fn reset(&mut self);
+
+    /// Execute a named action (from CLI/IPC). Returns toast text if handled.
+    fn exec_action(&mut self, _name: &str, _args: &[String], _data: &serde_json::Value) -> Option<String> {
+        None
+    }
 }
 
 pub fn create_interactive(
@@ -144,8 +150,8 @@ pub fn create_interactive(
         "bluetooth" => Some(Box::new(bluetooth::BluetoothDeep::new())),
         "keyboard" => Some(Box::new(keyboard::KeyboardDeep::new())),
         "network" => Some(Box::new(network::NetworkDeep::new())),
-        "wallpaper" => Some(Box::new(wallpaper_deep::WallpaperDeep::new())),
-        "snip" => Some(Box::new(snip::SnipDeep::new())),
+        "wallpaper" => Some(Box::new(wallpaper_deep::WallpaperDeep::new(module))),
+        "recording" => Some(Box::new(recording::RecordingDeep::new(icon_resolver))),
         "actions" => Some(Box::new(actions::ActionPalette::new(
             &module.name,
             module.key_hints.clone(),

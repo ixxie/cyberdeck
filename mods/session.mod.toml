@@ -11,11 +11,33 @@ interval = 10
 template = '{% if charging %}{{ "battery-charging" | icon }}{% elif capacity < 10 %}{{ "battery-empty" | icon }}{% elif capacity < 35 %}{{ "battery-low" | icon }}{% elif capacity < 65 %}{{ "battery-half" | icon }}{% else %}{{ "battery-full" | icon }}{% endif %}'
 condition = "{{ capacity < 20 and not charging }}"
 
-[commands]
-suspend = "systemctl suspend"
-shutdown = "shutdown now"
-reboot = "shutdown -r now"
-logout = "niri msg action quit"
+[[actions]]
+name = "suspend"
+run = "systemctl suspend"
+key = "z"
+label = "suspend"
+icon = "moon"
+
+[[actions]]
+name = "shutdown"
+run = "shutdown now"
+key = "x"
+label = "shutdown"
+icon = "power"
+
+[[actions]]
+name = "reboot"
+run = "shutdown -r now"
+key = "r"
+label = "reboot"
+icon = "arrow-clockwise"
+
+[[actions]]
+name = "logout"
+run = "niri msg action quit"
+key = "l"
+label = "logout"
+icon = "sign-out"
 
 [[hooks]]
 condition = "{{ capacity < 20 and not charging }}"
@@ -26,30 +48,6 @@ timeout = 5
 condition = "{{ capacity < 5 and not charging }}"
 action = "notify-send -u critical 'Power' 'Battery critical'"
 timeout = 5
-
-[[key-hints]]
-key = "z"
-action = "systemctl suspend"
-label = "suspend"
-icon = "moon"
-
-[[key-hints]]
-key = "x"
-action = "shutdown now"
-label = "shutdown"
-icon = "power"
-
-[[key-hints]]
-key = "r"
-action = "shutdown -r now"
-label = "reboot"
-icon = "arrow-clockwise"
-
-[[key-hints]]
-key = "l"
-action = "niri msg action quit"
-label = "logout"
-icon = "sign-out"
 
 [[key-hints]]
 key = "Esc"

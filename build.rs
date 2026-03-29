@@ -27,10 +27,20 @@ fn main() {
             .unwrap_or(&id)
             .to_string();
 
+        // Prefer [[actions]] names, fall back to [commands] keys
         let cmds: Vec<String> = table
-            .get("commands")
-            .and_then(|v| v.as_table())
-            .map(|t| t.keys().cloned().collect())
+            .get("actions")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|a| a.get("name").and_then(|n| n.as_str()).map(String::from))
+                    .collect()
+            })
+            .or_else(|| {
+                table.get("commands")
+                    .and_then(|v| v.as_table())
+                    .map(|t| t.keys().cloned().collect())
+            })
             .unwrap_or_default();
 
         entries.push((id, name, cmds));
@@ -39,12 +49,25 @@ fn main() {
 
     entries.sort_by(|a, b| a.0.cmp(&b.0));
 
+    // Generate MOD_META for CLI
     let mut code = String::from("pub const MOD_META: &[(&str, &str, &[&str])] = &[\n");
     for (id, name, cmds) in &entries {
         let cmds_str: Vec<String> = cmds.iter().map(|c| format!("\"{}\"", c)).collect();
         code.push_str(&format!(
             "    (\"{id}\", \"{name}\", &[{}]),\n",
             cmds_str.join(", ")
+        ));
+    }
+    code.push_str("];\n");
+
+    // Generate BUILTIN_MODS for modlib (use absolute paths for include_str!)
+    let mods_abs = fs::canonicalize(mods_dir).expect("cannot canonicalize mods/");
+    code.push_str("\npub const BUILTIN_MODS: &[(&str, &str)] = &[\n");
+    for (id, _, _) in &entries {
+        let abs = mods_abs.join(format!("{id}.mod.toml"));
+        code.push_str(&format!(
+            "    (\"{id}\", include_str!(\"{}\")),\n",
+            abs.display()
         ));
     }
     code.push_str("];\n");

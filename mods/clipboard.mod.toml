@@ -19,18 +19,16 @@ condition = "{{ count > 0 }}"
 template = '{{ count }} entries{% if preview %}  {{ preview | dim }}{% endif %}'
 condition = "{{ count > 0 }}"
 
-[commands]
-paste = "cliphist list | head -1 | cliphist decode | wl-copy"
-clear = "cliphist wipe"
-
-[[key-hints]]
+[[actions]]
+name = "paste"
+run = "cliphist list | head -1 | cliphist decode | wl-copy"
 key = "p"
-action = "cliphist list | head -1 | cliphist decode | wl-copy"
 label = "paste last"
 
-[[key-hints]]
+[[actions]]
+name = "clear"
+run = "cliphist wipe"
 key = "d"
-action = "cliphist wipe"
 label = "clear"
 
 [[key-hints]]

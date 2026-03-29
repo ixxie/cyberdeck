@@ -192,9 +192,11 @@ const CONFIG_TEMPLATE: &str = r##"# Cyberdeck configuration
                                 # deps: curl
 # location = "London"           # optional: city name for wttr.in
 
-# [bar.modules.snip]            # screenshots & recording
+# [bar.modules.screenshot]      # screenshots
                                 # deps: grim, slurp, wl-clipboard
-                                # deps (recording): wl-screenrec
+
+# [bar.modules.recording]      # screen recording
+                                # deps: slurp, wl-screenrec
 
 # [bar.modules.wallpaper]       # wallpaper cycling
                                 # deps: swww
@@ -221,7 +223,6 @@ fn run_module_cmd(args: &[String]) {
     let rest = &args[1..];
 
     if rest.is_empty() {
-        // clap handles --help; bare module name with no action shows help too
         let _ = build_cli()
             .find_subcommand_mut(mod_name)
             .map(|c| c.print_help());
@@ -231,37 +232,7 @@ fn run_module_cmd(args: &[String]) {
     let action = rest[0].as_str();
     let extra = &rest[1..];
 
-    // Native mod commands
-    if mod_name == "inputs" && action == "denoise" {
-        crate::mods::inputs::cli_toggle_denoise();
-        return;
-    }
-    if mod_name == "notifications" && action == "clear" {
-        crate::notifications::STORE.lock().unwrap().clear_all();
-        eprintln!("notifications cleared");
-        return;
-    }
-    if mod_name == "wallpaper" {
-        let params: serde_json::Map<String, serde_json::Value> = module
-            .params
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
-        match action {
-            "shuffle" => {
-                let group = extra.first().map(|s| s.as_str());
-                crate::mods::wallpaper::shuffle(&params, group);
-                return;
-            }
-            "init" => {
-                crate::mods::wallpaper::init(&params);
-                return;
-            }
-            _ => {}
-        }
-    }
-
-    // Implicit "open" action
+    // "open" is always available
     if action == "open" {
         ipc::send_request(&IpcRequest::Push {
             child: mod_name.clone(),
@@ -269,41 +240,28 @@ fn run_module_cmd(args: &[String]) {
         return;
     }
 
-    // Try matching against commands (greedy: join words to match multi-word keys)
-    if let Some(cmd) = find_command(&module.commands, rest) {
-        exec_shell(cmd);
-        return;
-    }
-
-    // Single-word command fallback
-    if let Some(cmd) = module.commands.get(action) {
-        let full = if extra.is_empty() {
-            cmd.clone()
+    // Try [[actions]] first
+    if let Some(act) = module.action_by_name(action) {
+        if act.run == "native" {
+            ipc::send_request(&IpcRequest::Action {
+                module: mod_name.clone(),
+                action: action.to_string(),
+                args: extra.to_vec(),
+            });
         } else {
-            format!("{cmd} {}", extra.join(" "))
-        };
-        exec_shell(&full);
+            let full = if extra.is_empty() {
+                act.run.clone()
+            } else {
+                format!("{} {}", act.run, extra.join(" "))
+            };
+            exec_shell(&full);
+        }
         return;
     }
 
     eprintln!("unknown action '{action}' for module '{mod_name}'");
     eprintln!("run 'cyberdeck {mod_name} --help' to see available actions");
     std::process::exit(1);
-}
-
-/// Try to match a multi-word command key against the args.
-/// e.g. args ["vol", "up"] matches command key "vol up"
-fn find_command<'a>(
-    commands: &'a std::collections::HashMap<String, String>,
-    args: &[String],
-) -> Option<&'a str> {
-    for n in (2..=args.len()).rev() {
-        let key = args[..n].join(" ");
-        if let Some(cmd) = commands.get(&key) {
-            return Some(cmd.as_str());
-        }
-    }
-    None
 }
 
 fn exec_shell(cmd: &str) {

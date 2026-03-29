@@ -25,7 +25,8 @@ in
     outputs = importMod "outputs";
     profiles = importMod "profiles";
     session = importMod "session";
-    snip = importMod "snip";
+    screenshot = importMod "screenshot";
+    recording = importMod "recording";
     storage = importMod "storage";
     system = importMod "system";
     wallpaper = importMod "wallpaper";

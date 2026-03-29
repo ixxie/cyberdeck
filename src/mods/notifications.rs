@@ -162,4 +162,15 @@ impl InteractiveModule for NotificationsDeep {
     fn reset(&mut self) {
         self.cursor = 0;
     }
+
+    fn exec_action(&mut self, name: &str, _args: &[String], _data: &serde_json::Value) -> Option<String> {
+        match name {
+            "clear" => {
+                crate::notifications::STORE.lock().unwrap().clear_all();
+                self.cursor = 0;
+                Some("cleared".into())
+            }
+            _ => None,
+        }
+    }
 }

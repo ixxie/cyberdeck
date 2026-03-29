@@ -14,10 +14,20 @@ condition = "{{ not connected or signal < 25 }}"
 [widget]
 template = '{% if connected %}{{ ssid }}  {{ signal }}%  {{ ip }}{% else %}disconnected{% endif %}'
 
-[commands]
-scan = "nmcli device wifi rescan"
-connect = "nmcli device wifi connect"
-disconnect = "nmcli connection down id"
+[[actions]]
+name = "scan"
+run = "nmcli device wifi rescan"
+label = "scan"
+
+[[actions]]
+name = "connect"
+run = "nmcli device wifi connect"
+label = "connect"
+
+[[actions]]
+name = "disconnect"
+run = "nmcli connection down id"
+label = "disconnect"
 
 [[key-hints]]
 key = "←→"

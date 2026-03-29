@@ -1,0 +1,30 @@
+name = "Screenshot"
+icon = "camera"
+type = "actions"
+
+[source]
+type = "native"
+kind = "session"
+interval = 60
+
+[widget]
+template = "screenshots"
+
+[[actions]]
+name = "snip"
+run = "bash -c 'dir=$HOME/Pictures/snips && mkdir -p $dir && slurp | grim -g - - | tee $dir/$(date +%Y-%m-%dT%H-%M-%S).png | wl-copy -t image/png'"
+key = "s"
+label = "snip region"
+icon = "selection"
+
+[[actions]]
+name = "full"
+run = "bash -c 'dir=$HOME/Pictures/snips && mkdir -p $dir && out=$(niri msg -j focused-output | jq -r .name) && grim -o $out - | tee $dir/$(date +%Y-%m-%dT%H-%M-%S).png | wl-copy -t image/png'"
+key = "f"
+label = "full screen"
+icon = "monitor"
+
+[[key-hints]]
+key = "Esc"
+action = "back"
+label = "back"
