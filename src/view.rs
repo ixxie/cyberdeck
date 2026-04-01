@@ -188,20 +188,6 @@ fn location_elems(
         .and_then(|d| d.get("workspaces"))
         .and_then(|v| v.as_array());
 
-    // Determine if multi-monitor
-    let multi_monitor = workspaces
-        .map(|wss| {
-            let mut outputs = std::collections::HashSet::new();
-            for ws in wss {
-                if let Some(o) = ws.get("output").and_then(|v| v.as_str()) {
-                    outputs.insert(o);
-                }
-            }
-            outputs.len() > 1
-        })
-        .unwrap_or(false);
-
-    // Find focused workspace on this output
     let focused_ws = workspaces.and_then(|wss| {
         wss.iter().find(|ws| {
             ws.get("focused").and_then(|v| v.as_bool()).unwrap_or(false)
@@ -211,9 +197,6 @@ fn location_elems(
     let ws_idx = focused_ws
         .and_then(|ws| ws.get("idx").and_then(|v| v.as_i64()))
         .unwrap_or(1);
-    let ws_output = focused_ws
-        .and_then(|ws| ws.get("output").and_then(|v| v.as_str()))
-        .unwrap_or("");
 
     let title = win_data
         .and_then(|d| d.get("title").and_then(|v| v.as_str()))
@@ -229,24 +212,13 @@ fn location_elems(
         bright.b,
         (dim.a as f32 + (bright.a as f32 - dim.a as f32) * t) as u8,
     );
-    let sep_fg = Rgba::new(fg.r, fg.g, fg.b, (fg.a as f32 * 0.5) as u8);
-
-    let sep = "/".to_string();
-
     let mut elems = Vec::new();
-
-    // Monitor name (only if multi-monitor)
-    if multi_monitor && !ws_output.is_empty() {
-        elems.push(Elem::text(ws_output.to_string()).fg(fg));
-        elems.push(Elem::text(sep.clone()).fg(sep_fg));
-    }
 
     // Workspace number
     elems.push(Elem::text(ws_idx.to_string()).fg(fg));
 
     // Window title
     if !title.is_empty() {
-        elems.push(Elem::text(sep.clone()).fg(sep_fg));
         elems.push(Elem::text(title.to_string()).fg(fg));
     }
 
