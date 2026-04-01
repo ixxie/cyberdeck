@@ -231,7 +231,7 @@ fn location_elems(
     );
     let sep_fg = Rgba::new(fg.r, fg.g, fg.b, (fg.a as f32 * 0.5) as u8);
 
-    let sep = template_engine.render_icon("slash-forward");
+    let sep = "/".to_string();
 
     let mut elems = Vec::new();
 
