@@ -318,13 +318,13 @@ pub(crate) fn root_content(
         }
     }
 
-    // Right: alert badges + clock (skip window/workspaces — now in location indicator)
+    // Right: alert badges + per-app notification icons + clock
     let mut right = Vec::new();
     let mut mod_ids: Vec<&String> = config.bar.modules.keys().collect();
     mod_ids.sort();
     for id in mod_ids {
         match id.as_str() {
-            "calendar" | "window" | "workspaces" => continue,
+            "calendar" | "window" | "workspaces" | "notifications" => continue,
             _ => {
                 for elem in render_badges(id) {
                     right.push(pill(vec![elem], bg, pc));
@@ -332,6 +332,28 @@ pub(crate) fn root_content(
             }
         }
     }
+
+    // Per-app notification icons (replace bell badge)
+    let store = crate::notifications::STORE.lock().unwrap();
+    let groups = store.by_app();
+    drop(store);
+    for group in &groups {
+        if group.unread == 0 { continue; }
+        let fg = if group.muted { pal.idle } else { pal.active };
+        let mut elems = Vec::new();
+        if let Some(ref pm) = group.icon_pixmap {
+            elems.push(Elem::text(String::new()).icon(pm.clone()).fg(fg));
+        } else {
+            let icon = template_engine.render_icon("bell");
+            elems.push(Elem::text(icon).fg(fg));
+        }
+        if group.unread > 1 {
+            elems.push(Elem::text(group.unread.to_string()).fg(fg));
+        }
+        let path = format!("__notif_app:{}", group.app_name);
+        right.push(pill(elems, bg, pc).path(&path));
+    }
+
     let clock_elems = render_badges("calendar");
     if !clock_elems.is_empty() {
         right.push(pill(clock_elems, bg, pc).path("calendar"));
