@@ -124,6 +124,8 @@ pub struct FSpan {
     pub radius: f32,
     pub opacity: f32,
     pub elems: Vec<FElem>,
+    /// Natural (unconstrained) content width — may exceed rect.w when flex-shrunk.
+    pub content_w: f32,
 }
 
 pub struct Hit {
@@ -230,11 +232,13 @@ pub fn lay(content: &BarContent, bar_w: f32, bar_h: f32, track_pad: f32, m: &Met
         node: NodeId,
         span_idx: usize,
         group_idx: usize,
+        flat_idx: usize,
         elem_nodes: Vec<NodeId>,
     }
     let mut span_infos: Vec<SpanInfo> = Vec::new();
     let mut group_nodes: Vec<NodeId> = Vec::new();
     let mut elem_idx = 0usize;
+    let mut flat_span_idx = 0usize;
 
     for (gi, spans) in groups.iter().enumerate() {
         let mut span_nodes = Vec::new();
@@ -284,8 +288,10 @@ pub fn lay(content: &BarContent, bar_w: f32, bar_h: f32, track_pad: f32, m: &Met
                 node: span_node,
                 span_idx: si,
                 group_idx: gi,
+                flat_idx: flat_span_idx,
                 elem_nodes,
             });
+            flat_span_idx += 1;
             span_nodes.push(span_node);
         }
 
@@ -407,6 +413,7 @@ pub fn lay(content: &BarContent, bar_w: f32, bar_h: f32, track_pad: f32, m: &Met
             radius: src_span.radius,
             opacity: src_span.opacity,
             elems: felems,
+            content_w: m.span_w_at(info.flat_idx),
         });
     }
 

@@ -185,13 +185,9 @@ impl Renderer {
 
             let bar_right = w as f32;
 
-            // Clip context: only fade when content overflows the span
+            // Clip context: fade when natural content is wider than allocated span
             let clip_right = span_x + span_w;
-            let content_overflows = fspan.elems.iter().any(|e| {
-                let ex = e.rect.x * sf;
-                let ew = e.rect.w * sf;
-                ex + ew > clip_right + 0.5
-            });
+            let content_overflows = fspan.content_w * sf > span_w * sf + 0.5;
             let fade_w = if content_overflows { cell_w * 2.0 } else { 0.0 };
 
             for felem in &fspan.elems {
