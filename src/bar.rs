@@ -520,9 +520,7 @@ impl BarApp {
                 }
                 let tid = self.set_nav_toast(elems);
                 self.nav_toast_id = Some(tid);
-                if self.spotlight_toast_id.is_some() {
-                    self.pause_regular_toasts();
-                }
+                self.pause_regular_toasts();
             }
         }
     }
@@ -534,11 +532,15 @@ impl BarApp {
             Timer::from_duration(Duration::from_secs(2)),
             move |_, _, app| {
                 app.remove_toast(nav_tid);
-                if app.nav_toast_id == Some(nav_tid) {
-                    app.nav_toast_id = None;
-                }
-                if app.spotlight_toast_id == Some(nav_tid) {
-                    app.spotlight_toast_id = None;
+                let was_nav = app.nav_toast_id == Some(nav_tid);
+                let was_spotlight = app.spotlight_toast_id == Some(nav_tid);
+                if was_nav { app.nav_toast_id = None; }
+                if was_spotlight { app.spotlight_toast_id = None; }
+                // Unpause if no other priority toast remains
+                if (was_nav || was_spotlight)
+                    && app.spotlight_toast_id.is_none()
+                    && app.nav_toast_id.is_none()
+                {
                     app.unpause_regular_toasts();
                 }
                 app.dirty.set(true);
@@ -615,13 +617,16 @@ impl BarApp {
         }
     }
 
-    /// Pause all non-spotlight toasts by removing their calloop timers
-    /// and recording remaining lifetime. Idempotent for already-paused toasts.
+    /// Pause all regular toasts by removing their calloop timers
+    /// and recording remaining lifetime. Skips priority toasts (spotlight, nav)
+    /// and already-paused toasts. Idempotent.
     fn pause_regular_toasts(&mut self) {
         let spotlight_id = self.spotlight_toast_id;
+        let nav_id = self.nav_toast_id;
         let mut to_pause: Vec<(u64, RegistrationToken, Duration)> = Vec::new();
         for t in &self.toasts {
             if Some(t.toast_id) == spotlight_id { continue; }
+            if Some(t.toast_id) == nav_id { continue; }
             if t.paused_remaining.is_some() { continue; }
             let remaining = t.lifetime.saturating_sub(t.created.elapsed());
             if remaining.is_zero() { continue; }
