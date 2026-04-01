@@ -163,6 +163,7 @@ pub struct BarApp {
     prev_focused_ws: Option<i64>,
     prev_focused_win: Option<(i64, i64)>,
     nav_toast_id: Option<u64>,
+    pub location_changed: Instant,
 }
 
 pub struct Toast {
@@ -280,6 +281,7 @@ impl BarApp {
             prev_focused_ws: None,
             prev_focused_win: None,
             nav_toast_id: None,
+            location_changed: Instant::now(),
         }
     }
 
@@ -352,6 +354,7 @@ impl BarApp {
         self.process_hooks();
         let qh = self.qh.clone();
         let nav_age = self.nav_changed.elapsed();
+        let location_age = self.location_changed.elapsed();
         let ids: Vec<u32> = self.bars.keys().copied().collect();
         let mut drew = false;
         for id in ids {
@@ -363,7 +366,7 @@ impl BarApp {
                         &mut self.nav, &mut self.root_scroll,
                         &self.toasts, &self.badge_overrides,
                         &self.interactive,
-                        nav_age,
+                        nav_age, location_age,
                     );
                     drew = true;
                 }
@@ -379,6 +382,11 @@ impl BarApp {
 
         // Nav transition
         if self.nav_changed.elapsed() < fade_dur {
+            return true;
+        }
+
+        // Location indicator dim (bright for 2s, then fade over 1s)
+        if self.location_changed.elapsed() < Duration::from_secs(3) {
             return true;
         }
 
@@ -464,14 +472,10 @@ impl BarApp {
         }
     }
 
-    /// Detect workspace/window focus changes and emit indicator toasts.
-    /// Uses a single replaceable toast slot to avoid stacking.
+    /// Detect workspace/window focus changes and update location_changed timestamp.
     fn check_ws_changes(&mut self) {
         let states = self.states.borrow();
-        let Some(ws_state) = states.get("workspaces") else {
-            log::trace!("ws_changes: no workspaces state");
-            return;
-        };
+        let Some(ws_state) = states.get("workspaces") else { return };
         if !ws_state.dirty { return; }
         let data = &ws_state.data;
 
@@ -498,31 +502,12 @@ impl BarApp {
             && cur_win != self.prev_focused_win;
 
         if ws_changed || win_changed {
-            log::info!("ws_changes: ws_changed={ws_changed} win_changed={win_changed} cur_ws={cur_ws:?} prev={:?}", self.prev_focused_ws);
+            self.location_changed = Instant::now();
+            log::info!("location changed: ws={ws_changed} win={win_changed}");
         }
-
-        let toast_elems = if ws_changed {
-            workspaces.map(|wss| crate::view::ws_indicator_elems(wss, &self.template_engine))
-        } else if win_changed {
-            workspaces.zip(windows).map(|(wss, wins)| crate::view::win_indicator_elems(wss, wins, &self.template_engine))
-        } else {
-            None
-        };
 
         self.prev_focused_ws = cur_ws;
         self.prev_focused_win = cur_win;
-        drop(states);
-
-        if let Some(elems) = toast_elems {
-            if !elems.is_empty() {
-                if let Some(tid) = self.nav_toast_id.take() {
-                    self.remove_toast(tid);
-                }
-                let tid = self.set_nav_toast(elems);
-                self.nav_toast_id = Some(tid);
-                self.pause_regular_toasts();
-            }
-        }
     }
 
     fn set_nav_toast(&mut self, elems: Vec<crate::layout::Elem>) -> u64 {
@@ -737,6 +722,7 @@ impl BarApp {
         badge_overrides: &HashMap<String, RegistrationToken>,
         interactive: &HashMap<String, Box<dyn InteractiveModule>>,
         nav_age: Duration,
+        location_age: Duration,
     ) {
         if bar.width == 0 {
             return;
@@ -774,7 +760,7 @@ impl BarApp {
 
         // Build content (views return raw spans, no pagination)
         let mut content = if nav.stack.is_empty() && matches!(nav.mode, DisplayMode::Visual) {
-            crate::view::root_content(config, template_engine, states, pal, output_name, badge_overrides, toasts, gap, pill_bg, &pc)
+            crate::view::root_content(config, template_engine, states, pal, output_name, badge_overrides, toasts, location_age, gap, pill_bg, &pc)
         } else {
             match nav.mode {
                 DisplayMode::Visual => {

@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::time::Duration;
 
 use smithay_client_toolkit::reexports::calloop::RegistrationToken;
 
@@ -160,6 +161,98 @@ pub(crate) fn paginate_spans(
     result
 }
 
+/// Compute location indicator opacity: bright on change, dims after 2s over 1s
+fn location_opacity(location_age: Duration) -> f32 {
+    let secs = location_age.as_secs_f32();
+    if secs < 2.0 {
+        1.0
+    } else if secs < 3.0 {
+        1.0 - (secs - 2.0) // linear fade over 1s
+    } else {
+        0.0
+    }
+}
+
+/// Build the unified location pill: [monitor ·] workspace · window_title
+fn location_elems(
+    states: &HashMap<String, ModuleState>,
+    template_engine: &TemplateEngine,
+    output_name: Option<&str>,
+    pal: Palette,
+    location_age: Duration,
+) -> Vec<Elem> {
+    let ws_data = states.get("workspaces").map(|s| &s.data);
+    let win_data = states.get("window").map(|s| &s.data);
+
+    let workspaces = ws_data
+        .and_then(|d| d.get("workspaces"))
+        .and_then(|v| v.as_array());
+
+    // Determine if multi-monitor
+    let multi_monitor = workspaces
+        .map(|wss| {
+            let mut outputs = std::collections::HashSet::new();
+            for ws in wss {
+                if let Some(o) = ws.get("output").and_then(|v| v.as_str()) {
+                    outputs.insert(o);
+                }
+            }
+            outputs.len() > 1
+        })
+        .unwrap_or(false);
+
+    // Find focused workspace on this output
+    let focused_ws = workspaces.and_then(|wss| {
+        wss.iter().find(|ws| {
+            ws.get("focused").and_then(|v| v.as_bool()).unwrap_or(false)
+        })
+    });
+
+    let ws_idx = focused_ws
+        .and_then(|ws| ws.get("idx").and_then(|v| v.as_i64()))
+        .unwrap_or(1);
+    let ws_output = focused_ws
+        .and_then(|ws| ws.get("output").and_then(|v| v.as_str()))
+        .unwrap_or("");
+
+    let title = win_data
+        .and_then(|d| d.get("title").and_then(|v| v.as_str()))
+        .unwrap_or("");
+
+    // Opacity: bright active on recent change, dim idle otherwise
+    let t = location_opacity(location_age);
+    let bright = pal.active;
+    let dim = pal.idle;
+    let fg = Rgba::new(
+        bright.r,
+        bright.g,
+        bright.b,
+        (dim.a as f32 + (bright.a as f32 - dim.a as f32) * t) as u8,
+    );
+    let sep_fg = Rgba::new(fg.r, fg.g, fg.b, (fg.a as f32 * 0.5) as u8);
+
+    let sep = template_engine.render_icon("dot");
+
+    let mut elems = Vec::new();
+
+    // Monitor name (only if multi-monitor)
+    if multi_monitor && !ws_output.is_empty() {
+        elems.push(Elem::text(ws_output.to_string()).fg(fg));
+        elems.push(Elem::text(sep.clone()).fg(sep_fg));
+    }
+
+    // Workspace number
+    elems.push(Elem::text(ws_idx.to_string()).fg(fg));
+
+    // Window title
+    if !title.is_empty() {
+        elems.push(Elem::text(sep.clone()).fg(sep_fg));
+        elems.push(Elem::text(title.to_string()).fg(fg));
+    }
+
+    elems
+}
+
 pub(crate) fn root_content(
     config: &Config,
     template_engine: &TemplateEngine,
@@ -168,6 +261,7 @@ pub(crate) fn root_content(
     output_name: Option<&str>,
     badge_overrides: &HashMap<String, RegistrationToken>,
     toasts: &[Toast],
+    location_age: Duration,
     gap: f32,
     bg: Rgba,
     pc: &PillCfg,
@@ -190,34 +284,41 @@ pub(crate) fn root_content(
         elems
     };
 
-    // Left: launcher + window title
+    // Left: launcher icon only
     let launcher_icon = template_engine.render_icon("terminal");
-    let mut nav_elems = vec![Elem::text(launcher_icon).fg(pal.selected)];
-    nav_elems.extend(render_badges("window"));
-    let left = vec![pill(nav_elems, bg, pc).path("launcher")];
+    let left = vec![pill(vec![Elem::text(launcher_icon).fg(pal.selected)], bg, pc).path("launcher")];
 
-    // Center: toasts (skip paused ones — spotlight takes priority)
+    // Center: toasts override location indicator
     let mut center = Vec::new();
-    let toast_fg = Rgba::new(pal.active.r, pal.active.g, pal.active.b,
-        (pal.active.a as f32 * 0.85) as u8);
-    for t in toasts {
-        if t.paused_remaining.is_some() { continue; }
-        let opacity = crate::bar::toast_opacity(t);
-        if !t.elems.is_empty() {
-            let elems: Vec<Elem> = t.elems.iter().cloned().map(|e| {
-                if e.fg == Rgba::default() { e.fg(toast_fg) } else { e }
-            }).collect();
-            center.push(pill_bright(elems, bg, pc).opacity(opacity));
-        } else {
-            let mut elem = Elem::text(t.text.clone()).fg(toast_fg);
-            if let Some(ref pm) = t.icon_pixmap {
-                elem = elem.icon(pm.clone());
+    let has_toasts = toasts.iter().any(|t| t.paused_remaining.is_none());
+    if has_toasts {
+        let toast_fg = Rgba::new(pal.active.r, pal.active.g, pal.active.b,
+            (pal.active.a as f32 * 0.85) as u8);
+        for t in toasts {
+            if t.paused_remaining.is_some() { continue; }
+            let opacity = crate::bar::toast_opacity(t);
+            if !t.elems.is_empty() {
+                let elems: Vec<Elem> = t.elems.iter().cloned().map(|e| {
+                    if e.fg == Rgba::default() { e.fg(toast_fg) } else { e }
+                }).collect();
+                center.push(pill_bright(elems, bg, pc).opacity(opacity));
+            } else {
+                let mut elem = Elem::text(t.text.clone()).fg(toast_fg);
+                if let Some(ref pm) = t.icon_pixmap {
+                    elem = elem.icon(pm.clone());
+                }
+                center.push(pill_bright(vec![elem], bg, pc).opacity(opacity));
             }
-            center.push(pill_bright(vec![elem], bg, pc).opacity(opacity));
+        }
+    } else {
+        // Location indicator as default center
+        let loc_elems = location_elems(&states_ref, template_engine, output_name, pal, location_age);
+        if !loc_elems.is_empty() {
+            center.push(pill(loc_elems, bg, pc));
         }
     }
 
-    // Right: alert badges + clock
+    // Right: alert badges + clock (skip window/workspaces — now in location indicator)
     let mut right = Vec::new();
     let mut mod_ids: Vec<&String> = config.bar.modules.keys().collect();
     mod_ids.sort();
@@ -460,65 +561,6 @@ pub(crate) fn text_content(
     let right = vec![pill(vec![Elem::text(right_text).fg(pal.idle)], bg, pc)];
 
     BarContent { left: left_spans, center: center_spans, right, gap, left_w: None, right_w: None }
-}
-
-/// Workspace indicator: one Elem per workspace with hexagon icon
-pub fn ws_indicator_elems(
-    workspaces: &[serde_json::Value],
-    template_engine: &TemplateEngine,
-) -> Vec<Elem> {
-    let icon = template_engine.render_icon("hexagon");
-    let bright = Rgba::new(255, 255, 255, 200);
-    let dim = Rgba::new(255, 255, 255, 60);
-
-    // Find which output the focused workspace is on, filter to that output
-    let focused_output = workspaces.iter()
-        .find(|ws| ws.get("focused").and_then(|v| v.as_bool()).unwrap_or(false))
-        .and_then(|ws| ws.get("output").and_then(|v| v.as_str()));
-
-    let mut filtered: Vec<&serde_json::Value> = workspaces.iter()
-        .filter(|ws| {
-            let output = ws.get("output").and_then(|v| v.as_str());
-            output == focused_output
-        })
-        .collect();
-    filtered.sort_by_key(|ws| ws.get("idx").and_then(|v| v.as_i64()).unwrap_or(0));
-
-    filtered.iter().map(|ws| {
-        let focused = ws.get("focused").and_then(|v| v.as_bool()).unwrap_or(false);
-        Elem::text(icon.clone()).fg(if focused { bright } else { dim })
-    }).collect()
-}
-
-/// Window indicator: one Elem per window with app-window icon
-pub fn win_indicator_elems(
-    workspaces: &[serde_json::Value],
-    windows: &[serde_json::Value],
-    template_engine: &TemplateEngine,
-) -> Vec<Elem> {
-    let focused_ws = workspaces.iter().find(|ws| {
-        ws.get("focused").and_then(|v| v.as_bool()).unwrap_or(false)
-    });
-    let Some(ws) = focused_ws else { return Vec::new() };
-    let ws_id = ws.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
-
-    let mut ws_wins: Vec<&serde_json::Value> = windows.iter()
-        .filter(|w| w.get("workspace_id").and_then(|v| v.as_i64()).unwrap_or(-1) == ws_id)
-        .collect();
-    ws_wins.sort_by_key(|w| {
-        let col = w.get("col").and_then(|v| v.as_i64()).unwrap_or(0);
-        let row = w.get("row").and_then(|v| v.as_i64()).unwrap_or(0);
-        (col, row)
-    });
-
-    let icon = template_engine.render_icon("app-window");
-    let bright = Rgba::new(255, 255, 255, 200);
-    let dim = Rgba::new(255, 255, 255, 60);
-
-    ws_wins.iter().map(|w| {
-        let focused = w.get("focused").and_then(|v| v.as_bool()).unwrap_or(false);
-        Elem::text(icon.clone()).fg(if focused { bright } else { dim })
-    }).collect()
 }
 
 pub(crate) fn text_matched_items(
