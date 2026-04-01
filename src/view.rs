@@ -398,15 +398,14 @@ pub(crate) fn mod_content(
             }
         }).collect();
 
-        let mut hints = Vec::new();
-        for hint in deep.key_hints() {
-            let display = if hint.label.is_empty() {
+        let hint_strs: Vec<String> = deep.key_hints().iter().map(|hint| {
+            if hint.label.is_empty() {
                 format!("[{}] {}", hint.key, hint.action)
             } else {
                 format!("[{}] {}", hint.key, hint.label)
-            };
-            hints.push(Elem::text(display).fg(pal.idle));
-        }
+            }
+        }).collect();
+        let hints = vec![Elem::text(hint_strs.join("  ")).fg(pal.idle)];
 
         let breadcrumb = render_breadcrumb_elems(module, template_engine, pal.active);
         let left = vec![pill(breadcrumb, bg, pc).path("__back")];
@@ -435,18 +434,19 @@ pub(crate) fn mod_content(
     let breadcrumb = render_breadcrumb_elems(module, template_engine, pal.active);
     drop(states_ref);
 
-    let mut hints = Vec::new();
-    for hint in &module.key_hints {
-        let display = if hint.label.is_empty() {
+    let hint_strs: Vec<String> = module.key_hints.iter().map(|hint| {
+        if hint.label.is_empty() {
             format!("[{}] {}", hint.key, hint.action)
         } else {
             format!("[{}] {}", hint.key, hint.label)
-        };
-        hints.push(Elem::text(display).fg(pal.idle));
-    }
-    if hints.is_empty() {
-        hints.push(Elem::text("[Esc] back").fg(pal.idle));
-    }
+        }
+    }).collect();
+    let hints_text = if hint_strs.is_empty() {
+        "[Esc] back".to_string()
+    } else {
+        hint_strs.join("  ")
+    };
+    let hints = vec![Elem::text(hints_text).fg(pal.idle)];
 
     let left = vec![pill(breadcrumb, bg, pc).path("__back")];
     let right = vec![pill(hints, bg, pc)];
