@@ -197,7 +197,7 @@ impl InteractiveModule for RecordingDeep {
         }
     }
 
-    fn activate(&mut self, _data: &serde_json::Value) {
+    fn activate(&mut self, _data: &serde_json::Value, _sub_path: &[String]) {
         self.cursor = 0;
     }
 

@@ -135,7 +135,7 @@ impl InteractiveModule for ActionPalette {
         }
     }
 
-    fn activate(&mut self, data: &serde_json::Value) {
+    fn activate(&mut self, data: &serde_json::Value, _sub_path: &[String]) {
         self.cursor = self.active_index(data).unwrap_or(0);
     }
 

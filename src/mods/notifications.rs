@@ -51,24 +51,33 @@ pub fn poll(_params: &serde_json::Map<String, Value>) -> Value {
 
 pub struct NotificationsDeep {
     cursor: usize,
+    app_filter: Option<String>,
 }
 
 impl NotificationsDeep {
     pub fn new() -> Self {
-        Self { cursor: 0 }
+        Self { cursor: 0, app_filter: None }
     }
 
-    fn notifs<'a>(&self, data: &'a Value) -> Option<&'a Vec<Value>> {
-        data.get("notifications").and_then(|v| v.as_array())
+    fn filtered_notifs(&self, data: &Value) -> Vec<Value> {
+        let all = data.get("notifications").and_then(|v| v.as_array());
+        match (&self.app_filter, all) {
+            (Some(app), Some(ns)) => ns.iter()
+                .filter(|n| n.get("app").and_then(|v| v.as_str()) == Some(app))
+                .cloned()
+                .collect(),
+            (None, Some(ns)) => ns.clone(),
+            _ => Vec::new(),
+        }
     }
 
     fn count(&self, data: &Value) -> usize {
-        self.notifs(data).map(|a| a.len()).unwrap_or(0)
+        self.filtered_notifs(data).len()
     }
 
     fn selected_id(&self, data: &Value) -> Option<u32> {
-        self.notifs(data)
-            .and_then(|ns| ns.get(self.cursor))
+        self.filtered_notifs(data)
+            .get(self.cursor)
             .and_then(|n| n.get("id"))
             .and_then(|v| v.as_u64())
             .map(|v| v as u32)
@@ -80,10 +89,14 @@ impl InteractiveModule for NotificationsDeep {
         let active_fg = Rgba::new(fg.r, fg.g, fg.b, (fg.a as f32 * 0.72) as u8);
         let idle_fg = Rgba::new(fg.r, fg.g, fg.b, (fg.a as f32 * 0.44) as u8);
 
-        let notifs = match self.notifs(data) {
-            Some(n) if !n.is_empty() => n,
-            _ => return vec![vec![Elem::text("no notifications").fg(idle_fg)]],
-        };
+        let notifs = self.filtered_notifs(data);
+        if notifs.is_empty() {
+            let label = match &self.app_filter {
+                Some(app) => format!("no notifications from {app}"),
+                None => "no notifications".to_string(),
+            };
+            return vec![vec![Elem::text(label).fg(idle_fg)]];
+        }
 
         let store = notifications::STORE.lock().unwrap();
         let stored = store.all();
@@ -172,12 +185,12 @@ impl InteractiveModule for NotificationsDeep {
         }
     }
 
-    fn activate(&mut self, data: &serde_json::Value) {
-        self.cursor = self.notifs(data)
-            .and_then(|ns| ns.iter().position(|n| {
-                n.get("read").and_then(|v| v.as_bool()) == Some(false)
-            }))
-            .unwrap_or(0);
+    fn activate(&mut self, data: &serde_json::Value, sub_path: &[String]) {
+        self.app_filter = sub_path.first().cloned();
+        let notifs = self.filtered_notifs(data);
+        self.cursor = notifs.iter().position(|n| {
+            n.get("read").and_then(|v| v.as_bool()) == Some(false)
+        }).unwrap_or(0);
     }
 
     fn reset(&mut self) {

@@ -37,6 +37,15 @@ impl NavState {
     pub fn module(id: &str, mode: DisplayMode) -> Self {
         Self { stack: vec![id.to_string()], mode, ..Self::new() }
     }
+
+    /// Open notifications deep view filtered to a specific app
+    pub fn notif_app(app_name: &str) -> Self {
+        Self {
+            stack: vec!["notifications".to_string(), app_name.to_string()],
+            mode: DisplayMode::Visual,
+            ..Self::new()
+        }
+    }
 }
 
 impl BarApp {
@@ -239,7 +248,7 @@ impl BarApp {
         }
     }
 
-    pub(crate) fn handle_click(&mut self, surface: &smithay_client_toolkit::reexports::client::protocol::wl_surface::WlSurface, x: f64, y: f64) {
+    pub(crate) fn handle_click(&mut self, surface: &smithay_client_toolkit::reexports::client::protocol::wl_surface::WlSurface, x: f64, y: f64, ctrl: bool) {
         let Some(bar_id) = self.bar_id_for_surface(surface) else { return };
         let Some(bar) = self.bars.get(&bar_id) else { return };
 
@@ -250,7 +259,7 @@ impl BarApp {
         let Some(frame) = &bar.frame else { return };
         let Some(path) = frame.hit(px, py) else { return };
 
-        log::info!("click hit: {} (x={:.0})", path, px);
+        log::info!("click hit: {} ctrl={} (x={:.0})", path, ctrl, px);
 
         if path == "__back" {
             self.set_nav(NavState::new());
@@ -278,10 +287,95 @@ impl BarApp {
             return;
         }
 
+        // Per-app notification icon interactions
+        if let Some(app_name) = path.strip_prefix("__notif_app:") {
+            if ctrl {
+                // Ctrl+click: dismiss all from this app
+                crate::notifications::STORE.lock().unwrap().dismiss_app(app_name);
+                self.source_mgr.nudge("notifications");
+                self.dirty.set(true);
+            } else {
+                // Click: open notifications deep view filtered to this app
+                self.set_nav(NavState::notif_app(app_name));
+            }
+            return;
+        }
+
         if let Some(module) = self.config.bar.modules.get(path) {
             let mode = if module.has_view() { DisplayMode::Visual } else { DisplayMode::Text };
             self.set_nav(NavState::module(path, mode));
         }
+    }
+
+    pub(crate) fn handle_hover(&mut self, surface: &smithay_client_toolkit::reexports::client::protocol::wl_surface::WlSurface, x: f64, y: f64) {
+        let Some(bar_id) = self.bar_id_for_surface(surface) else { return };
+        let Some(bar) = self.bars.get(&bar_id) else { return };
+
+        let track_pad = self.config.settings.resolve_track().padding;
+        let px = x as f32 - track_pad;
+        let py = y as f32;
+
+        let path = bar.frame.as_ref().and_then(|f| f.hit(px, py)).map(String::from);
+
+        if path == self.hover_path { return; }
+
+        // Clear previous hover spotlight
+        if let Some(tid) = self.hover_spotlight_id.take() {
+            self.remove_toast(tid);
+            if self.spotlight_toast_id == Some(tid) {
+                self.spotlight_toast_id = None;
+            }
+            self.unpause_regular_toasts();
+            self.dirty.set(true);
+        }
+
+        self.hover_path = path.clone();
+
+        // Hover over per-app notification icon → show toasts as spotlight
+        if let Some(ref p) = path {
+            if let Some(app_name) = p.strip_prefix("__notif_app:") {
+                let store = crate::notifications::STORE.lock().unwrap();
+                let notifs = store.for_app(app_name);
+                drop(store);
+
+                if !notifs.is_empty() {
+                    let mut elems = Vec::new();
+                    // Show app name + recent notification summaries
+                    for n in notifs.iter().take(3) {
+                        let text = if n.body.is_empty() {
+                            n.summary.clone()
+                        } else {
+                            format!("{} — {}", n.summary, n.body)
+                        };
+                        let mut elem = crate::layout::Elem::text(text);
+                        if let Some(ref pm) = n.icon_pixmap {
+                            elem = elem.icon(pm.clone());
+                        }
+                        elems.push(elem);
+                    }
+                    if notifs.len() > 3 {
+                        let more = format!("+{} more", notifs.len() - 3);
+                        elems.push(crate::layout::Elem::text(more));
+                    }
+                    let tid = self.set_nav_toast(elems);
+                    self.hover_spotlight_id = Some(tid);
+                    self.spotlight_toast_id = Some(tid);
+                    self.pause_regular_toasts();
+                }
+            }
+        }
+    }
+
+    pub(crate) fn clear_hover(&mut self) {
+        if let Some(tid) = self.hover_spotlight_id.take() {
+            self.remove_toast(tid);
+            if self.spotlight_toast_id == Some(tid) {
+                self.spotlight_toast_id = None;
+            }
+            self.unpause_regular_toasts();
+            self.dirty.set(true);
+        }
+        self.hover_path = None;
     }
 
     fn event_key_name(event: &KeyEvent) -> Option<String> {

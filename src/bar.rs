@@ -164,6 +164,8 @@ pub struct BarApp {
     prev_focused_win: Option<(i64, i64)>,
     nav_toast_id: Option<u64>,
     pub location_changed: Instant,
+    hover_path: Option<String>,
+    hover_spotlight_id: Option<u64>,
 }
 
 pub struct Toast {
@@ -285,6 +287,8 @@ impl BarApp {
             prev_focused_win: None,
             nav_toast_id: None,
             location_changed: Instant::now(),
+            hover_path: None,
+            hover_spotlight_id: None,
         }
     }
 
@@ -304,7 +308,8 @@ impl BarApp {
                     .get(mod_id)
                     .map(|s| s.data.clone())
                     .unwrap_or(serde_json::Value::Null);
-                deep.activate(&data);
+                let sub_path = if nav.stack.len() > 1 { &nav.stack[1..] } else { &[] };
+                deep.activate(&data, sub_path);
             }
         }
         self.nav = nav;
@@ -1050,10 +1055,20 @@ impl PointerHandler for BarApp {
         _pointer: &WlPointer, events: &[PointerEvent],
     ) {
         for event in events {
-            if let PointerEventKind::Press { button, .. } = event.kind {
-                if button == 0x110 {
-                    self.handle_click(&event.surface, event.position.0, event.position.1);
+            match event.kind {
+                PointerEventKind::Press { button, .. } => {
+                    if button == 0x110 {
+                        let ctrl = self.modifiers.ctrl;
+                        self.handle_click(&event.surface, event.position.0, event.position.1, ctrl);
+                    }
                 }
+                PointerEventKind::Motion { .. } => {
+                    self.handle_hover(&event.surface, event.position.0, event.position.1);
+                }
+                PointerEventKind::Leave { .. } => {
+                    self.clear_hover();
+                }
+                _ => {}
             }
         }
     }

@@ -337,7 +337,7 @@ impl InteractiveModule for InputsDeep {
         }
     }
 
-    fn activate(&mut self, data: &serde_json::Value) {
+    fn activate(&mut self, data: &serde_json::Value, _sub_path: &[String]) {
         if let Some(devs) = self.devices(data) {
             self.cursor = devs.iter().position(|d| {
                 d.get("default").and_then(|v| v.as_bool()).unwrap_or(false)

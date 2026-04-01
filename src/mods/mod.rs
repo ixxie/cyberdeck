@@ -162,7 +162,8 @@ pub trait InteractiveModule {
     fn handle_key(&mut self, event: &KeyEvent, data: &serde_json::Value) -> KeyResult;
     fn reset(&mut self);
     /// Called when the module is entered/activated, with current source data.
-    fn activate(&mut self, _data: &serde_json::Value) {}
+    /// `sub_path` contains any extra nav stack entries after the module id.
+    fn activate(&mut self, _data: &serde_json::Value, _sub_path: &[String]) {}
 
     /// Execute a named action (from CLI/IPC). Returns toast text if handled.
     fn exec_action(&mut self, _name: &str, _args: &[String], _data: &serde_json::Value) -> Option<String> {
