@@ -2,57 +2,86 @@ use smithay_client_toolkit::seat::keyboard::{KeyEvent, Keysym};
 
 use crate::bar::BarApp;
 use crate::color::Rgba;
-use crate::config::KeyHintDef;
+use crate::config::{ActionDef, KeyHintDef};
 use crate::layout::Elem;
 use crate::mods::{InteractiveModule, KeyResult};
 
 struct Action {
     key: String,
+    name: String,
     label: String,
-    command: String,
+    run: String,
     icon_char: Option<String>,
 }
 
 pub struct ActionPalette {
-    name: String,
+    module_name: String,
     actions: Vec<Action>,
     cursor: usize,
 }
 
 impl ActionPalette {
-    pub fn new(name: &str, hints: Vec<KeyHintDef>, icon_resolver: &dyn Fn(&str) -> String) -> Self {
-        let actions: Vec<Action> = hints.into_iter()
-            .filter(|h| h.action != "back")
-            .map(|h| {
-                let icon_char = h.icon.as_deref().map(icon_resolver);
+    pub fn new(name: &str, action_defs: &[ActionDef], icon_resolver: &dyn Fn(&str) -> String) -> Self {
+        let actions: Vec<Action> = action_defs.iter()
+            .map(|a| {
+                let icon_char = a.icon.as_deref().map(icon_resolver);
+                let key = a.key.clone().unwrap_or_default();
                 Action {
-                    key: h.key,
-                    label: if h.label.is_empty() { h.action.clone() } else { h.label },
-                    command: h.action,
+                    key,
+                    name: a.name.clone(),
+                    label: if a.label.is_empty() { a.name.clone() } else { a.label.clone() },
+                    run: a.run.clone(),
                     icon_char,
                 }
             })
             .collect();
         Self {
-            name: name.to_string(),
+            module_name: name.to_string(),
             actions,
             cursor: 0,
         }
     }
 }
 
+impl ActionPalette {
+    fn active_index(&self, data: &serde_json::Value) -> Option<usize> {
+        if let serde_json::Value::Object(map) = data {
+            for val in map.values() {
+                if let serde_json::Value::String(s) = val {
+                    if let Some(i) = self.actions.iter().position(|a| a.name == *s) {
+                        return Some(i);
+                    }
+                }
+            }
+        }
+        None
+    }
+}
+
 impl InteractiveModule for ActionPalette {
-    fn render_center(&self, fg: Rgba, _data: &serde_json::Value) -> Vec<Vec<Elem>> {
+    fn render_center(&self, fg: Rgba, data: &serde_json::Value) -> Vec<Vec<Elem>> {
         let idle_fg = Rgba::new(fg.r, fg.g, fg.b, (fg.a as f32 * 0.44) as u8);
+        let active_fg = Rgba::new(fg.r, fg.g, fg.b, (fg.a as f32 * 0.72) as u8);
+        let active = self.active_index(data);
 
         self.actions.iter().enumerate().map(|(i, action)| {
-            let item_fg = if i == self.cursor { fg } else { idle_fg };
+            let item_fg = if i == self.cursor {
+                fg
+            } else if Some(i) == active {
+                active_fg
+            } else {
+                idle_fg
+            };
             let mut text = String::new();
             if let Some(icon) = &action.icon_char {
                 text.push_str(icon);
                 text.push(' ');
             }
-            text.push_str(&format!("{} ({})", action.label, action.key));
+            if action.key.is_empty() {
+                text.push_str(&action.label);
+            } else {
+                text.push_str(&format!("{} ({})", action.label, action.key));
+            }
             vec![Elem::text(text).fg(item_fg)]
         }).collect()
     }
@@ -60,7 +89,7 @@ impl InteractiveModule for ActionPalette {
     fn cursor(&self) -> Option<usize> { Some(self.cursor) }
 
     fn breadcrumb(&self) -> Vec<String> {
-        vec![self.name.clone()]
+        vec![self.module_name.clone()]
     }
 
     fn key_hints(&self) -> Vec<KeyHintDef> {
@@ -86,20 +115,28 @@ impl InteractiveModule for ActionPalette {
             }
             Keysym::Return => {
                 if let Some(action) = self.actions.get(self.cursor) {
-                    BarApp::spawn_command(&action.command);
+                    if action.run != "native" {
+                        BarApp::spawn_command(&action.run);
+                    }
                 }
                 KeyResult::Action
             }
             _ => {
                 if let Some(ch) = event.utf8.as_deref() {
                     if let Some(action) = self.actions.iter().find(|a| a.key == ch) {
-                        BarApp::spawn_command(&action.command);
+                        if action.run != "native" {
+                            BarApp::spawn_command(&action.run);
+                        }
                         return KeyResult::Action;
                     }
                 }
                 KeyResult::Ignored
             }
         }
+    }
+
+    fn activate(&mut self, data: &serde_json::Value) {
+        self.cursor = self.active_index(data).unwrap_or(0);
     }
 
     fn reset(&mut self) {

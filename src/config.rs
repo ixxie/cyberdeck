@@ -17,11 +17,13 @@ pub enum Layout {
 }
 
 #[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
 pub struct ThemeOverride {
     pub color: Option<Rgba>,
     pub opacity: Option<f32>,
     pub radius: Option<f32>,
     pub padding: Option<f32>,
+    pub max_chars: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -65,6 +67,7 @@ pub struct ResolvedPill {
     pub opacity: f32,
     pub radius: f32,
     pub padding: f32,
+    pub max_chars: usize,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -146,6 +149,7 @@ impl Settings {
             opacity: ov.and_then(|o| o.opacity).unwrap_or(opacity),
             radius: ov.and_then(|o| o.radius).unwrap_or(self.theme.radius),
             padding: ov.and_then(|o| o.padding).unwrap_or(self.theme.padding),
+            max_chars: ov.and_then(|o| o.max_chars).unwrap_or(48),
         }
     }
 }
@@ -173,6 +177,8 @@ pub struct BarDef {
 pub struct ModuleDef {
     #[serde(default)]
     pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
     #[serde(default)]
     pub icon: Option<String>,
     pub source: Option<SourceDef>,
@@ -534,6 +540,7 @@ impl Default for ModuleDef {
     fn default() -> Self {
         Self {
             name: String::new(),
+            description: None,
             icon: None,
             source: None,
             badges: HashMap::new(),

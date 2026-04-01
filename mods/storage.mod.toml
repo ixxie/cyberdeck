@@ -1,4 +1,5 @@
 name = "Storage"
+description = "Disk usage"
 icon = "hard-drives"
 
 [source]

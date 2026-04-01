@@ -1,4 +1,5 @@
 name = "Media"
+description = "Media playback controls"
 icon = "play"
 type = "media"
 

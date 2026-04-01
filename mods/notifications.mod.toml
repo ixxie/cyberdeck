@@ -1,4 +1,5 @@
 name = "Notifications"
+description = "Notification history"
 icon = "bell"
 type = "notifications"
 

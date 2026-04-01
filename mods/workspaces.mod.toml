@@ -1,4 +1,5 @@
 name = "Workspaces"
+description = "Workspace overview"
 icon = "hexagon"
 
 [source]

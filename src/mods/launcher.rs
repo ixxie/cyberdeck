@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 pub fn poll(_params: &serde_json::Map<String, Value>) -> Value {
     let dirs = scan_dirs();
     // Dedup by desktop ID (filename); later dirs override earlier ones
-    let mut seen: HashMap<String, (String, String)> = HashMap::new();
+    let mut seen: HashMap<String, DesktopEntry> = HashMap::new();
 
     for dir in dirs {
         let entries = match fs::read_dir(&dir) {
@@ -24,15 +24,18 @@ pub fn poll(_params: &serde_json::Map<String, Value>) -> Value {
                 .and_then(|f| f.to_str())
                 .unwrap_or("")
                 .to_string();
-            if let Some((name, exec)) = parse_desktop(&path) {
-                seen.insert(desktop_id.clone(), (name, exec));
+            if let Some(de) = parse_desktop(&path) {
+                seen.insert(desktop_id, de);
             }
         }
     }
 
     let mut entries: Vec<Value> = seen
         .into_iter()
-        .map(|(desktop_id, (name, exec))| json!({"name": name, "exec": exec, "desktop_id": desktop_id}))
+        .map(|(desktop_id, de)| json!({
+            "name": de.name, "exec": de.exec, "icon": de.icon,
+            "comment": de.comment, "desktop_id": desktop_id,
+        }))
         .collect();
     entries.sort_by(|a, b| {
         a["name"].as_str().unwrap_or("").to_lowercase()
@@ -66,10 +69,19 @@ fn scan_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-fn parse_desktop(path: &PathBuf) -> Option<(String, String)> {
+struct DesktopEntry {
+    name: String,
+    exec: String,
+    icon: String,
+    comment: String,
+}
+
+fn parse_desktop(path: &PathBuf) -> Option<DesktopEntry> {
     let content = fs::read_to_string(path).ok()?;
     let mut name: Option<String> = None;
     let mut exec: Option<String> = None;
+    let mut icon: Option<String> = None;
+    let mut comment: Option<String> = None;
     let mut no_display = false;
     let mut hidden = false;
     let mut in_entry = false;
@@ -94,6 +106,8 @@ fn parse_desktop(path: &PathBuf) -> Option<(String, String)> {
             match key.trim() {
                 "Name" if name.is_none() => name = Some(val.trim().to_string()),
                 "Exec" => exec = Some(strip_field_codes(val.trim())),
+                "Icon" if icon.is_none() => icon = Some(val.trim().to_string()),
+                "Comment" if comment.is_none() => comment = Some(val.trim().to_string()),
                 "NoDisplay" if val.trim() == "true" => no_display = true,
                 "Hidden" if val.trim() == "true" => hidden = true,
                 _ => {}
@@ -105,7 +119,12 @@ fn parse_desktop(path: &PathBuf) -> Option<(String, String)> {
         return None;
     }
 
-    Some((name?, exec?))
+    Some(DesktopEntry {
+        name: name?,
+        exec: exec?,
+        icon: icon.unwrap_or_default(),
+        comment: comment.unwrap_or_default(),
+    })
 }
 
 fn strip_field_codes(exec: &str) -> String {

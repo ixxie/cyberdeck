@@ -1,4 +1,5 @@
 name = "Outputs"
+description = "Speaker and audio output"
 icon = "speaker-high"
 type = "outputs"
 

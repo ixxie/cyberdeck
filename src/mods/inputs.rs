@@ -17,25 +17,28 @@ pub fn subscribe(
     sender: Sender<(String, Value)>,
     id: String,
 ) {
-    let mut last_vol = i64::MIN;
-    let mut last_muted = false;
-    let mut last_denoise = false;
+    let mut last_state = String::new();
     loop {
-        pipewire::invalidate();
-        let val = poll(&params);
-        let vol = val.get("volume").and_then(|v| v.as_i64()).unwrap_or(0);
-        let muted = val.get("muted").and_then(|v| v.as_bool()).unwrap_or(false);
-        let denoise = val.get("denoise").and_then(|v| v.as_bool()).unwrap_or(false);
-        if vol != last_vol || muted != last_muted || denoise != last_denoise {
-            last_vol = vol;
-            last_muted = muted;
-            last_denoise = denoise;
+        let cur_state = wpctl_state("@DEFAULT_AUDIO_SOURCE@");
+        if cur_state != last_state {
+            last_state = cur_state;
+            pipewire::invalidate();
+            let val = poll(&params);
             if sender.send((id.clone(), val)).is_err() {
                 return;
             }
         }
         std::thread::sleep(std::time::Duration::from_millis(200));
     }
+}
+
+fn wpctl_state(target: &str) -> String {
+    std::process::Command::new("wpctl")
+        .args(["get-volume", target])
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default()
 }
 
 pub fn poll(_params: &serde_json::Map<String, Value>) -> Value {
@@ -331,6 +334,14 @@ impl InteractiveModule for InputsDeep {
                 KeyResult::Action
             }
             _ => KeyResult::Ignored,
+        }
+    }
+
+    fn activate(&mut self, data: &serde_json::Value) {
+        if let Some(devs) = self.devices(data) {
+            self.cursor = devs.iter().position(|d| {
+                d.get("default").and_then(|v| v.as_bool()).unwrap_or(false)
+            }).unwrap_or(0);
         }
     }
 

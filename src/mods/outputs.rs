@@ -15,25 +15,29 @@ pub fn subscribe(
     sender: Sender<(String, Value)>,
     id: String,
 ) {
-    let mut last_vol = i64::MIN;
-    let mut last_muted = false;
-    let mut last_sink = String::new();
+    let mut last_state = String::new();
     loop {
-        pipewire::invalidate();
-        let val = poll(&params);
-        let vol = val.get("volume").and_then(|v| v.as_i64()).unwrap_or(0);
-        let muted = val.get("muted").and_then(|v| v.as_bool()).unwrap_or(false);
-        let sink = val.get("sink").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        if vol != last_vol || muted != last_muted || sink != last_sink {
-            last_vol = vol;
-            last_muted = muted;
-            last_sink = sink;
+        // Quick check via wpctl (reflects actual current state)
+        let cur_state = wpctl_state("@DEFAULT_AUDIO_SINK@");
+        if cur_state != last_state {
+            last_state = cur_state;
+            pipewire::invalidate();
+            let val = poll(&params);
             if sender.send((id.clone(), val)).is_err() {
                 return;
             }
         }
         std::thread::sleep(std::time::Duration::from_millis(200));
     }
+}
+
+fn wpctl_state(target: &str) -> String {
+    std::process::Command::new("wpctl")
+        .args(["get-volume", target])
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default()
 }
 
 pub fn poll(_params: &serde_json::Map<String, Value>) -> Value {

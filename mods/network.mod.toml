@@ -1,4 +1,5 @@
 name = "Network"
+description = "Network connections"
 icon = "wifi-high"
 type = "network"
 

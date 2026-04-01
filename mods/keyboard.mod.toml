@@ -1,4 +1,5 @@
 name = "Keyboard"
+description = "Keyboard layout and settings"
 icon = "keyboard"
 type = "keyboard"
 

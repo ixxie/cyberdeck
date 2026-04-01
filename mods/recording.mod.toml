@@ -1,4 +1,5 @@
 name = "Recording"
+description = "Screen recording"
 icon = "record"
 type = "recording"
 

@@ -1,4 +1,5 @@
 name = "Screenshot"
+description = "Capture screen regions"
 icon = "camera"
 type = "actions"
 

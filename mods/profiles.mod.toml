@@ -1,4 +1,5 @@
 name = "Profiles"
+description = "Power profile management"
 icon = "scales"
 type = "actions"
 

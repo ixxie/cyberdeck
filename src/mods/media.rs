@@ -31,18 +31,29 @@ pub fn subscribe(
             continue;
         };
 
-        let stdout = child.stdout.take().unwrap();
-        let reader = std::io::BufReader::new(stdout);
+        let mut stdout = child.stdout.take().unwrap();
+        let mut buf = [0u8; 4096];
+        let mut partial = String::new();
 
-        for line in reader.lines() {
-            let Ok(line) = line else { break };
-            let trimmed = line.trim();
-            if trimmed.is_empty() { continue; }
-            let val = serde_json::from_str::<Value>(trimmed)
-                .unwrap_or_else(|_| defaults());
-            if sender.send((id.clone(), val)).is_err() {
-                let _ = child.kill();
-                return;
+        loop {
+            let n = match std::io::Read::read(&mut stdout, &mut buf) {
+                Ok(0) => break,
+                Ok(n) => n,
+                Err(_) => break,
+            };
+            partial.push_str(&String::from_utf8_lossy(&buf[..n]));
+
+            while let Some(pos) = partial.find('\n') {
+                let line = partial[..pos].trim().to_string();
+                partial = partial[pos + 1..].to_string();
+
+                if line.is_empty() { continue; }
+                let val = serde_json::from_str::<Value>(&line)
+                    .unwrap_or_else(|_| defaults());
+                if sender.send((id.clone(), val)).is_err() {
+                    let _ = child.kill();
+                    return;
+                }
             }
         }
 

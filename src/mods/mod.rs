@@ -161,6 +161,8 @@ pub trait InteractiveModule {
     fn key_hints(&self) -> Vec<KeyHintDef>;
     fn handle_key(&mut self, event: &KeyEvent, data: &serde_json::Value) -> KeyResult;
     fn reset(&mut self);
+    /// Called when the module is entered/activated, with current source data.
+    fn activate(&mut self, _data: &serde_json::Value) {}
 
     /// Execute a named action (from CLI/IPC). Returns toast text if handled.
     fn exec_action(&mut self, _name: &str, _args: &[String], _data: &serde_json::Value) -> Option<String> {
@@ -186,7 +188,7 @@ pub fn create_interactive(
         "recording" => Some(Box::new(recording::RecordingDeep::new(icon_resolver))),
         "actions" => Some(Box::new(actions::ActionPalette::new(
             &module.name,
-            module.key_hints.clone(),
+            &module.actions,
             icon_resolver,
         ))),
         _ => None,

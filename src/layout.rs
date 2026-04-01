@@ -83,27 +83,16 @@ impl Span {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Align { Left, Center, Right }
-
-pub struct Zone {
-    pub align: Align,
-    pub spans: Vec<Span>,
+/// Bar content: left, center, and right span groups with a shared gap.
+pub struct BarContent {
+    pub left: Vec<Span>,
+    pub center: Vec<Span>,
+    pub right: Vec<Span>,
     pub gap: f32,
-}
-
-impl Zone {
-    pub fn left(spans: Vec<Span>, gap: f32) -> Self {
-        Self { align: Align::Left, spans, gap }
-    }
-
-    pub fn center(spans: Vec<Span>, gap: f32) -> Self {
-        Self { align: Align::Center, spans, gap }
-    }
-
-    pub fn right(spans: Vec<Span>, gap: f32) -> Self {
-        Self { align: Align::Right, spans, gap }
-    }
+    /// Fixed widths for left/right zones (set after measurement).
+    /// When set, the zone uses this width instead of auto-sizing from content.
+    pub left_w: Option<f32>,
+    pub right_w: Option<f32>,
 }
 
 // === Computed layer: what renderer consumes ===
@@ -167,10 +156,9 @@ pub struct Metrics {
 }
 
 impl Metrics {
-    /// Measure all zones up front using the renderer's font shaping.
-    /// After this, all widths are cached and no &mut Renderer is needed.
+    /// Measure all spans up front using the renderer's font shaping.
     pub fn measure(
-        zones: &[Zone],
+        content: &BarContent,
         cell_w: f32,
         cell_h: f32,
         scale: f32,
@@ -182,66 +170,45 @@ impl Metrics {
         let mut elem_widths = Vec::new();
         let mut span_widths = Vec::new();
 
-        for zone in zones {
-            for span in &zone.spans {
-                let n = span.elems.len();
-                let mut content_w = 0.0;
-                for elem in &span.elems {
-                    let icon_gap = cell_w;
-                    let icon_w = elem.icon.as_ref()
-                        .map(|pm| pm.width() as f32 / scale + icon_gap)
-                        .unwrap_or(0.0);
-                    let text_w = renderer.measure_text(&elem.text, icons, scale, font_scale);
-                    let ew = icon_w + text_w;
-                    elem_widths.push(ew);
-                    content_w += ew;
-                }
-                let gaps = n.saturating_sub(1) as f32 * elem_gap;
-                let sw = if n == 0 { 0.0 } else { content_w + gaps + 2.0 * span.pad_x };
-                span_widths.push(sw);
+        let all_spans: Vec<&Span> = content.left.iter()
+            .chain(content.center.iter())
+            .chain(content.right.iter())
+            .collect();
+
+        for span in &all_spans {
+            let n = span.elems.len();
+            let mut content_w = 0.0;
+            for elem in &span.elems {
+                let icon_gap = cell_w;
+                let icon_w = elem.icon.as_ref()
+                    .map(|pm| pm.width() as f32 / scale + icon_gap)
+                    .unwrap_or(0.0);
+                let text_w = renderer.measure_text(&elem.text, icons, scale, font_scale);
+                let ew = icon_w + text_w;
+                elem_widths.push(ew);
+                content_w += ew;
             }
+            let gaps = n.saturating_sub(1) as f32 * elem_gap;
+            let sw = if n == 0 { 0.0 } else { content_w + gaps + 2.0 * span.pad_x };
+            span_widths.push(sw);
         }
 
         Self { cell_w, cell_h, scale, elem_widths, span_widths, elem_gap }
     }
 
-    /// Get pre-measured elem width by flat index
     pub fn elem_w_at(&self, idx: usize) -> f32 {
         self.elem_widths.get(idx).copied().unwrap_or(0.0)
     }
 
-    /// Get pre-measured span width by flat index
     pub fn span_w_at(&self, idx: usize) -> f32 {
         self.span_widths.get(idx).copied().unwrap_or(0.0)
     }
 
-    pub fn icon_w(&self, pm: &Pixmap) -> f32 {
-        pm.width() as f32 / self.scale
-    }
-
-    // Legacy measurement for pagination (view.rs still uses these)
-    pub fn span_w(&self, span: &Span) -> f32 {
-        // Fallback: use cell_w estimation for spans not in the pre-measured set
-        let n = span.elems.len();
-        if n == 0 { return 0.0; }
-        let content: f32 = span.elems.iter().map(|e| {
-            let icon_gap = self.cell_w;
-            let icon_w = e.icon.as_ref()
-                .map(|pm| self.icon_w(pm) + icon_gap)
-                .unwrap_or(0.0);
-            let text_w: f32 = e.text.chars()
-                .filter(|&c| c != '\x01' && c != '\x02')
-                .map(|c| {
-                    if IconSet::is_icon_char(c) {
-                        self.cell_w // fallback for unmeasured
-                    } else {
-                        self.cell_w * c.width().unwrap_or(1) as f32
-                    }
-                }).sum();
-            icon_w + text_w
-        }).sum();
-        let gaps = n.saturating_sub(1) as f32 * self.elem_gap;
-        content + gaps + 2.0 * span.pad_x
+    /// Sum of span widths for a range of the flat span index.
+    pub fn spans_w(&self, range: std::ops::Range<usize>, gap: f32) -> f32 {
+        let w: f32 = range.clone().filter_map(|i| self.span_widths.get(i).copied()).sum();
+        let n = range.len();
+        w + n.saturating_sub(1) as f32 * gap
     }
 }
 
@@ -251,24 +218,28 @@ fn length(v: f32) -> LengthPercentage {
     LengthPercentage::Length(v)
 }
 
-pub fn lay(zones: &[Zone], bar_w: f32, bar_h: f32, track_pad: f32, m: &Metrics) -> Frame {
+pub fn lay(content: &BarContent, bar_w: f32, bar_h: f32, track_pad: f32, m: &Metrics) -> Frame {
     let mut tree = TaffyTree::<()>::new();
     let elem_gap = m.elem_gap;
+    let gap = content.gap;
+
+    // Collect all span groups: left=0, center=1, right=2
+    let groups: [&[Span]; 3] = [&content.left, &content.center, &content.right];
 
     struct SpanInfo {
         node: NodeId,
         span_idx: usize,
-        zone_idx: usize,
+        group_idx: usize,
         elem_nodes: Vec<NodeId>,
     }
     let mut span_infos: Vec<SpanInfo> = Vec::new();
-    let mut zone_nodes = Vec::new();
+    let mut group_nodes: Vec<NodeId> = Vec::new();
     let mut elem_idx = 0usize;
 
-    for (zi, zone) in zones.iter().enumerate() {
+    for (gi, spans) in groups.iter().enumerate() {
         let mut span_nodes = Vec::new();
 
-        for (si, span) in zone.spans.iter().enumerate() {
+        for (si, span) in spans.iter().enumerate() {
             let mut elem_nodes = Vec::new();
             for _elem in &span.elems {
                 let ew = m.elem_w_at(elem_idx);
@@ -284,7 +255,6 @@ pub fn lay(zones: &[Zone], bar_w: f32, bar_h: f32, track_pad: f32, m: &Metrics) 
                 elem_nodes.push(node);
             }
 
-            // Span container: row, padding, gap between elems, shrinkable
             let span_node = tree.new_with_children(
                 Style {
                     display: Display::Flex,
@@ -313,20 +283,24 @@ pub fn lay(zones: &[Zone], bar_w: f32, bar_h: f32, track_pad: f32, m: &Metrics) 
             span_infos.push(SpanInfo {
                 node: span_node,
                 span_idx: si,
-                zone_idx: zi,
+                group_idx: gi,
                 elem_nodes,
             });
             span_nodes.push(span_node);
         }
 
-        // Zone container: row with alignment
-        let justify = match zone.align {
-            Align::Left => JustifyContent::FlexStart,
-            Align::Center => JustifyContent::Center,
-            Align::Right => JustifyContent::FlexEnd,
+        let (flex_grow, flex_shrink, justify, fixed_w) = match gi {
+            0 => (0.0, 0.0, JustifyContent::FlexStart, content.left_w),
+            1 => (1.0, 1.0, JustifyContent::Center, None),
+            _ => (0.0, 0.0, JustifyContent::FlexEnd, content.right_w),
         };
 
-        let zone_node = tree.new_with_children(
+        let width = match fixed_w {
+            Some(w) => Dimension::Length(w),
+            None => Dimension::Auto,
+        };
+
+        let group_node = tree.new_with_children(
             Style {
                 display: Display::Flex,
                 flex_direction: FlexDirection::Row,
@@ -336,19 +310,14 @@ pub fn lay(zones: &[Zone], bar_w: f32, bar_h: f32, track_pad: f32, m: &Metrics) 
                     x: Overflow::Hidden,
                     y: Overflow::Hidden,
                 },
-                position: Position::Absolute,
-                inset: taffy::prelude::Rect {
-                    left: LengthPercentageAuto::Length(0.0),
-                    right: LengthPercentageAuto::Length(0.0),
-                    top: LengthPercentageAuto::Length(0.0),
-                    bottom: LengthPercentageAuto::Length(0.0),
-                },
+                flex_grow,
+                flex_shrink,
                 size: Size {
-                    width: Dimension::Percent(1.0),
+                    width,
                     height: Dimension::Percent(1.0),
                 },
                 gap: Size {
-                    width: length(zone.gap),
+                    width: length(gap),
                     height: length(0.0),
                 },
                 ..Default::default()
@@ -356,13 +325,15 @@ pub fn lay(zones: &[Zone], bar_w: f32, bar_h: f32, track_pad: f32, m: &Metrics) 
             &span_nodes,
         ).unwrap();
 
-        zone_nodes.push(zone_node);
+        group_nodes.push(group_node);
     }
 
-    // Root: the bar, with track padding as horizontal inset
+    // Root: left | center (flex:1) | right
     let root = tree.new_with_children(
         Style {
             display: Display::Flex,
+            flex_direction: FlexDirection::Row,
+            align_items: Some(AlignItems::Center),
             size: Size {
                 width: Dimension::Length(bar_w),
                 height: Dimension::Length(bar_h),
@@ -373,9 +344,13 @@ pub fn lay(zones: &[Zone], bar_w: f32, bar_h: f32, track_pad: f32, m: &Metrics) 
                 top: length(0.0),
                 bottom: length(0.0),
             },
+            gap: Size {
+                width: length(gap),
+                height: length(0.0),
+            },
             ..Default::default()
         },
-        &zone_nodes,
+        &group_nodes,
     ).unwrap();
 
     tree.compute_layout(root, Size::MAX_CONTENT).unwrap();
@@ -385,13 +360,13 @@ pub fn lay(zones: &[Zone], bar_w: f32, bar_h: f32, track_pad: f32, m: &Metrics) 
     let mut hits = Vec::new();
 
     for info in &span_infos {
-        let span = &zones[info.zone_idx].spans[info.span_idx];
+        let src_span = &groups[info.group_idx][info.span_idx];
         let sl = tree.layout(info.node).unwrap();
-        let zl = tree.layout(zone_nodes[info.zone_idx]).unwrap();
+        let gl = tree.layout(group_nodes[info.group_idx]).unwrap();
 
         let span_rect = Rect {
-            x: zl.location.x + sl.location.x,
-            y: zl.location.y + sl.location.y,
+            x: gl.location.x + sl.location.x,
+            y: gl.location.y + sl.location.y,
             w: sl.size.width,
             h: sl.size.height,
         };
@@ -399,7 +374,7 @@ pub fn lay(zones: &[Zone], bar_w: f32, bar_h: f32, track_pad: f32, m: &Metrics) 
         let mut felems = Vec::new();
         for (ei, &enode) in info.elem_nodes.iter().enumerate() {
             let el = tree.layout(enode).unwrap();
-            let elem = &span.elems[ei];
+            let elem = &src_span.elems[ei];
 
             let elem_rect = Rect {
                 x: span_rect.x + el.location.x,
@@ -415,22 +390,22 @@ pub fn lay(zones: &[Zone], bar_w: f32, bar_h: f32, track_pad: f32, m: &Metrics) 
                 icon: elem.icon.clone(),
             });
 
-            if span.path.is_none() {
+            if src_span.path.is_none() {
                 if let Some(ref p) = elem.path {
                     hits.push(Hit { rect: elem_rect, path: p.clone() });
                 }
             }
         }
 
-        if let Some(ref p) = span.path {
+        if let Some(ref p) = src_span.path {
             hits.push(Hit { rect: span_rect, path: p.clone() });
         }
 
         spans.push(FSpan {
             rect: span_rect,
-            bg: span.bg,
-            radius: span.radius,
-            opacity: span.opacity,
+            bg: src_span.bg,
+            radius: src_span.radius,
+            opacity: src_span.opacity,
             elems: felems,
         });
     }

@@ -1,4 +1,5 @@
 name = "Mounts"
+description = "Mounted drives and removable media"
 icon = "usb"
 
 [source]

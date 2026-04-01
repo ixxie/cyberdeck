@@ -1,4 +1,5 @@
 name = "Clipboard"
+description = "Clipboard actions"
 icon = "clipboard-text"
 type = "actions"
 

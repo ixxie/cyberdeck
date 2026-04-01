@@ -1,4 +1,5 @@
 name = "Weather"
+description = "Local weather forecast"
 icon = "cloud"
 
 [source]

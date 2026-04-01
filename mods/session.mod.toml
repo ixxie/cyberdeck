@@ -1,4 +1,5 @@
 name = "Session"
+description = "Lock, logout, reboot, shutdown"
 icon = "power"
 type = "actions"
 

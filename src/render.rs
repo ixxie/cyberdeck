@@ -185,6 +185,15 @@ impl Renderer {
 
             let bar_right = w as f32;
 
+            // Clip context: only fade when content overflows the span
+            let clip_right = span_x + span_w;
+            let content_overflows = fspan.elems.iter().any(|e| {
+                let ex = e.rect.x * sf;
+                let ew = e.rect.w * sf;
+                ex + ew > clip_right + 0.5
+            });
+            let fade_w = if content_overflows { cell_w * 2.0 } else { 0.0 };
+
             for felem in &fspan.elems {
                 let elem_x = felem.rect.x * sf;
                 let elem_y = text_y;
@@ -203,9 +212,10 @@ impl Renderer {
                     let icon_w = icon_pm.width() as f32;
                     let icon_h = icon_pm.height() as f32;
                     let dy = elem_y + (cell_h - icon_h) / 2.0;
-                    Self::composite_icon_at(
+                    Self::composite_icon_clipped(
                         pixmap.data_mut(), w, h,
                         icon_pm, cx.round() as i32, dy.round() as i32, fg,
+                        clip_right, fade_w,
                     );
                     cx += icon_w + cell_w;
                 }
@@ -227,7 +237,7 @@ impl Renderer {
                     }
 
                     if IconSet::is_icon_char(ch) {
-                        let run_w = self.draw_text_run(pixmap, &text_run, text_run_start, elem_y, font_size, cell_h, text_fg, run_is_emoji);
+                        let run_w = self.draw_text_run_clipped(pixmap, &text_run, text_run_start, elem_y, font_size, cell_h, text_fg, run_is_emoji, clip_right, fade_w);
                         cx = text_run_start + run_w;
                         text_run.clear();
 
@@ -235,9 +245,10 @@ impl Renderer {
                             let icon_w = icon_pm.width() as f32;
                             let icon_h = icon_pm.height() as f32;
                             let dy = elem_y + (cell_h - icon_h) / 2.0;
-                            Self::composite_icon_at(
+                            Self::composite_icon_clipped(
                                 pixmap.data_mut(), w, h,
                                 icon_pm, cx.round() as i32, dy.round() as i32, char_fg,
+                                clip_right, fade_w,
                             );
                             cx += icon_w;
                         } else {
@@ -257,7 +268,7 @@ impl Renderer {
                         };
 
                         if needs_flush {
-                            let run_w = self.draw_text_run(pixmap, &text_run, text_run_start, elem_y, font_size, cell_h, text_fg, run_is_emoji);
+                            let run_w = self.draw_text_run_clipped(pixmap, &text_run, text_run_start, elem_y, font_size, cell_h, text_fg, run_is_emoji, clip_right, fade_w);
                             cx = text_run_start + run_w;
                             text_run.clear();
                         }
@@ -272,14 +283,15 @@ impl Renderer {
                     }
                 }
                 // Flush remaining text
-                self.draw_text_run(pixmap, &text_run, text_run_start, elem_y, font_size, cell_h, text_fg, run_is_emoji);
+                self.draw_text_run_clipped(pixmap, &text_run, text_run_start, elem_y, font_size, cell_h, text_fg, run_is_emoji, clip_right, fade_w);
             }
         }
     }
 
-    fn draw_text_run(
+    fn draw_text_run_clipped(
         &mut self, pixmap: &mut Pixmap, text: &str, x: f32, y: f32,
         font_size: f32, cell_h: f32, fg: crate::color::Rgba, emoji: bool,
+        clip_right: f32, fade_w: f32,
     ) -> f32 {
         if text.is_empty() { return 0.0; }
 
@@ -317,7 +329,9 @@ impl Renderer {
         let h = pixmap.height();
         let data = pixmap.data_mut();
         buf.draw(&mut self.font_system, &mut self.swash_cache, color, |gx, gy, _w, _h, color| {
-            let alpha = color.a() as f32 / 255.0 * fg_alpha;
+            let px_x = (x_off + gx) as f32;
+            let clip_a = clip_alpha(px_x, clip_right, fade_w);
+            let alpha = color.a() as f32 / 255.0 * fg_alpha * clip_a;
             if alpha > 0.0 {
                 Self::blend_pixel(
                     data, w, h,
@@ -330,12 +344,13 @@ impl Renderer {
         shaped_w
     }
 
-    fn composite_icon_at(
+    fn composite_icon_clipped(
         data: &mut [u8],
         buf_w: u32, buf_h: u32,
         icon: &Pixmap,
         x: i32, y: i32,
         fg: crate::color::Rgba,
+        clip_right: f32, fade_w: f32,
     ) {
         let icon_w = icon.width() as i32;
         let icon_h = icon.height() as i32;
@@ -349,8 +364,9 @@ impl Renderer {
                 if px < 0 || py < 0 || (px as u32) >= buf_w || (py as u32) >= buf_h {
                     continue;
                 }
+                let clip_a = clip_alpha(px as f32, clip_right, fade_w);
                 let src_idx = (iy * icon_w + ix) as usize * 4;
-                let alpha = icon_data[src_idx + 3] as f32 / 255.0 * fg_alpha;
+                let alpha = icon_data[src_idx + 3] as f32 / 255.0 * fg_alpha * clip_a;
                 if alpha > 0.0 {
                     Self::blend_pixel(
                         data, buf_w, buf_h,
@@ -410,6 +426,14 @@ impl Renderer {
             i += 4;
         }
     }
+}
+
+fn clip_alpha(px: f32, clip_right: f32, fade_w: f32) -> f32 {
+    if px >= clip_right { return 0.0; }
+    if fade_w > 0.0 && px >= clip_right - fade_w {
+        return (clip_right - px) / fade_w;
+    }
+    1.0
 }
 
 fn is_emoji(ch: char) -> bool {

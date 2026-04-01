@@ -45,7 +45,7 @@ use tiny_skia::Pixmap;
 
 use crate::color::Rgba;
 use crate::config::{Config, ModuleDef, Position};
-use crate::layout::{Frame, Metrics, Zone, lay};
+use crate::layout::{BarContent, Frame, Metrics, lay};
 use crate::mods::InteractiveModule;
 use crate::render::Renderer;
 use crate::icons::IconSet;
@@ -152,6 +152,7 @@ pub struct BarApp {
     pub keyboard: Option<WlKeyboard>,
     pub pointer: Option<WlPointer>,
     pub nav: NavState,
+    pub root_scroll: usize,
     pub modifiers: Modifiers,
     pub toasts: Vec<Toast>,
     pub badge_overrides: HashMap<String, RegistrationToken>,
@@ -173,6 +174,8 @@ pub struct Toast {
     pub token: RegistrationToken,
     pub created: Instant,
     pub lifetime: Duration,
+    /// When set, toast timer is paused with this much time remaining.
+    pub paused_remaining: Option<Duration>,
 }
 
 const MAX_VISIBLE_TOASTS: usize = 3;
@@ -259,6 +262,7 @@ impl BarApp {
             keyboard: None,
             pointer: None,
             nav: NavState::new(),
+            root_scroll: 0,
             modifiers: Modifiers {
                 ctrl: false,
                 alt: false,
@@ -289,6 +293,15 @@ impl BarApp {
     pub fn set_nav(&mut self, nav: NavState) {
         let needs_kb = !(nav.stack.is_empty() && matches!(nav.mode, DisplayMode::Visual));
         log::info!("nav -> stack={:?} mode={:?} kb={}", nav.stack, nav.mode, needs_kb);
+        if let Some(mod_id) = nav.stack.first() {
+            if let Some(deep) = self.interactive.get_mut(mod_id) {
+                let data = self.states.borrow()
+                    .get(mod_id)
+                    .map(|s| s.data.clone())
+                    .unwrap_or(serde_json::Value::Null);
+                deep.activate(&data);
+            }
+        }
         self.nav = nav;
         self.nav_changed = Instant::now();
         for bar in self.bars.values() {
@@ -347,7 +360,7 @@ impl BarApp {
                     Self::draw_bar(
                         bar, &self.config, &mut self.renderer,
                         &self.template_engine, &self.states, &qh,
-                        &mut self.nav,
+                        &mut self.nav, &mut self.root_scroll,
                         &self.toasts, &self.badge_overrides,
                         &self.interactive,
                         nav_age,
@@ -369,8 +382,9 @@ impl BarApp {
             return true;
         }
 
-        // Toast fade-in
+        // Toast fade-in (skip paused toasts)
         for t in &self.toasts {
+            if t.paused_remaining.is_some() { continue; }
             if t.created.elapsed() < fade_dur {
                 return true;
             }
@@ -399,9 +413,18 @@ impl BarApp {
                     for (i, hook) in child.hooks.iter().enumerate() {
                         let is_true = self.template_engine.eval_hook_condition(child_id, i, &ms.data);
                         if is_true {
+                            log::debug!("hook fired: {child_id} action={}", hook.action);
                             actions.push((child_id.clone(), hook.action.clone(), hook.timeout));
                         }
                     }
+                } else {
+                    log::debug!("hooks skipped (not initialized): {child_id}");
+                }
+                if child_id == "outputs" {
+                    log::debug!("outputs dirty={} initialized={} data_vol={:?} prev_vol={:?}",
+                        ms.dirty, ms.initialized,
+                        ms.data.get("volume"),
+                        ms.prev_data.get("volume"));
                 }
                 processed.push(child_id.clone());
             }
@@ -445,7 +468,10 @@ impl BarApp {
     /// Uses a single replaceable toast slot to avoid stacking.
     fn check_ws_changes(&mut self) {
         let states = self.states.borrow();
-        let Some(ws_state) = states.get("workspaces") else { return };
+        let Some(ws_state) = states.get("workspaces") else {
+            log::trace!("ws_changes: no workspaces state");
+            return;
+        };
         if !ws_state.dirty { return; }
         let data = &ws_state.data;
 
@@ -471,6 +497,10 @@ impl BarApp {
         let win_changed = cur_win.is_some() && self.prev_focused_win.is_some()
             && cur_win != self.prev_focused_win;
 
+        if ws_changed || win_changed {
+            log::info!("ws_changes: ws_changed={ws_changed} win_changed={win_changed} cur_ws={cur_ws:?} prev={:?}", self.prev_focused_ws);
+        }
+
         let toast_elems = if ws_changed {
             workspaces.map(|wss| crate::view::ws_indicator_elems(wss, &self.template_engine))
         } else if win_changed {
@@ -490,6 +520,9 @@ impl BarApp {
                 }
                 let tid = self.set_nav_toast(elems);
                 self.nav_toast_id = Some(tid);
+                if self.spotlight_toast_id.is_some() {
+                    self.pause_regular_toasts();
+                }
             }
         }
     }
@@ -503,6 +536,10 @@ impl BarApp {
                 app.remove_toast(nav_tid);
                 if app.nav_toast_id == Some(nav_tid) {
                     app.nav_toast_id = None;
+                }
+                if app.spotlight_toast_id == Some(nav_tid) {
+                    app.spotlight_toast_id = None;
+                    app.unpause_regular_toasts();
                 }
                 app.dirty.set(true);
                 TimeoutAction::Drop
@@ -518,6 +555,7 @@ impl BarApp {
             token,
             created: Instant::now(),
             lifetime: Duration::from_secs(2),
+            paused_remaining: None,
         });
         self.dirty.set(true);
         tid
@@ -559,14 +597,71 @@ impl BarApp {
             token,
             created: Instant::now(),
             lifetime: Duration::from_secs(timeout),
+            paused_remaining: None,
         });
+
+        // Pause immediately if a spotlight is active
+        if self.spotlight_toast_id.is_some() {
+            self.pause_regular_toasts();
+        }
         self.dirty.set(true);
     }
 
     fn remove_toast(&mut self, tid: u64) {
         if let Some(pos) = self.toasts.iter().position(|t| t.toast_id == tid) {
             let old = self.toasts.remove(pos);
+            // Token may already be removed if toast was paused; remove is a no-op then
             self.loop_handle.remove(old.token);
+        }
+    }
+
+    /// Pause all non-spotlight toasts by removing their calloop timers
+    /// and recording remaining lifetime. Idempotent for already-paused toasts.
+    fn pause_regular_toasts(&mut self) {
+        let spotlight_id = self.spotlight_toast_id;
+        let mut to_pause: Vec<(u64, RegistrationToken, Duration)> = Vec::new();
+        for t in &self.toasts {
+            if Some(t.toast_id) == spotlight_id { continue; }
+            if t.paused_remaining.is_some() { continue; }
+            let remaining = t.lifetime.saturating_sub(t.created.elapsed());
+            if remaining.is_zero() { continue; }
+            to_pause.push((t.toast_id, t.token, remaining));
+        }
+        for (tid, token, remaining) in to_pause {
+            self.loop_handle.remove(token);
+            if let Some(t) = self.toasts.iter_mut().find(|t| t.toast_id == tid) {
+                t.paused_remaining = Some(remaining);
+            }
+        }
+    }
+
+    /// Resume paused toasts by re-registering calloop timers with their
+    /// remaining lifetime.
+    fn unpause_regular_toasts(&mut self) {
+        let mut to_unpause: Vec<(u64, Duration)> = Vec::new();
+        for t in &self.toasts {
+            if let Some(remaining) = t.paused_remaining {
+                to_unpause.push((t.toast_id, remaining));
+            }
+        }
+        for (tid, remaining) in to_unpause {
+            let token = self.loop_handle.insert_source(
+                Timer::from_duration(remaining),
+                move |_, _, app| {
+                    app.remove_toast(tid);
+                    if app.nav_toast_id == Some(tid) {
+                        app.nav_toast_id = None;
+                    }
+                    app.dirty.set(true);
+                    TimeoutAction::Drop
+                },
+            ).expect("failed to re-register toast timer");
+            if let Some(t) = self.toasts.iter_mut().find(|t| t.toast_id == tid) {
+                t.created = Instant::now();
+                t.lifetime = remaining;
+                t.token = token;
+                t.paused_remaining = None;
+            }
         }
     }
 
@@ -601,6 +696,7 @@ impl BarApp {
         }
         let tid = self.set_nav_toast(elems);
         self.spotlight_toast_id = Some(tid);
+        self.pause_regular_toasts();
     }
 
     fn set_badge_override(&mut self, mod_path: &str, timeout: u64) {
@@ -631,6 +727,7 @@ impl BarApp {
         states: &Rc<std::cell::RefCell<HashMap<String, ModuleState>>>,
         qh: &QueueHandle<BarApp>,
         nav: &mut NavState,
+        root_scroll: &mut usize,
         toasts: &[Toast],
         badge_overrides: &HashMap<String, RegistrationToken>,
         interactive: &HashMap<String, Box<dyn InteractiveModule>>,
@@ -661,6 +758,7 @@ impl BarApp {
         let pc = crate::view::PillCfg {
             padding: pill.padding * output_mul,
             radius: pill.radius * output_mul,
+            max_chars: pill.max_chars,
         };
 
         let bar_h = ((renderer.cell_h + 2.0 * pill.padding + 2.0 * track.padding) * output_mul).ceil() as u32;
@@ -669,35 +767,49 @@ impl BarApp {
         let cell_h = renderer.cell_h * output_mul;
         let scale = bar.scale as f32 * output_mul;
 
-        // Basic metrics for pagination (legacy cell_w estimation)
-        let basic_metrics = Metrics {
-            cell_w, cell_h, scale,
-            elem_widths: Vec::new(), span_widths: Vec::new(),
-            elem_gap: cell_w * 0.5,
-        };
-
-        let zones: Vec<Zone> = if nav.stack.is_empty() && matches!(nav.mode, DisplayMode::Visual) {
-            let icon_h = (renderer.cell_h * bar.scale as f32).ceil() as u32;
-            crate::view::root_zones(config, template_engine, states, pal, output_name, badge_overrides, toasts, gap, pill_bg, icon_h, bar_content_w, &basic_metrics, &pc)
+        // Build content (views return raw spans, no pagination)
+        let mut content = if nav.stack.is_empty() && matches!(nav.mode, DisplayMode::Visual) {
+            crate::view::root_content(config, template_engine, states, pal, output_name, badge_overrides, toasts, gap, pill_bg, &pc)
         } else {
             match nav.mode {
                 DisplayMode::Visual => {
                     let mod_id = nav.stack.first().map(|s| s.as_str());
-                    crate::view::mod_zones(
+                    crate::view::mod_content(
                         mod_id, config, template_engine, states, pal, output_name, interactive, gap, pill_bg, &pc,
                     ).unwrap_or_else(|| {
-                        crate::view::text_zones(nav, config, template_engine, states, pal, gap, pill_bg, bar_content_w, &basic_metrics, &pc)
+                        crate::view::text_content(nav, config, template_engine, states, pal, gap, pill_bg, &pc)
                     })
                 }
                 DisplayMode::Text => {
-                    crate::view::text_zones(nav, config, template_engine, states, pal, gap, pill_bg, bar_content_w, &basic_metrics, &pc)
+                    crate::view::text_content(nav, config, template_engine, states, pal, gap, pill_bg, &pc)
                 }
             }
         };
 
-        // Accurate measurement using font shaping
-        let metrics = Metrics::measure(&zones, cell_w, cell_h, scale, output_mul, renderer, &bar.icons);
-        let mut frame = lay(&zones, bar_w, bar_h as f32, track_pad, &metrics);
+        // Fixed side zone widths; center gets the rest
+        let side_w = 300.0 * output_mul;
+        content.left_w = Some(side_w);
+        content.right_w = Some(side_w);
+        let center_avail = bar_content_w - 2.0 * side_w - 2.0 * gap;
+
+        // Accurate measurement for pagination and layout
+        let metrics = Metrics::measure(&content, cell_w, cell_h, scale, output_mul, renderer, &bar.icons);
+        let left_n = content.left.len();
+
+        let selected = nav.selected;
+        let scroll = if nav.stack.is_empty() && matches!(nav.mode, DisplayMode::Visual) {
+            root_scroll
+        } else {
+            &mut nav.scroll
+        };
+        content.center = crate::view::paginate_spans(
+            content.center, selected, scroll, center_avail,
+            left_n, &metrics, template_engine, gap, pill_bg, pal.idle, &pc,
+        );
+
+        // Re-measure after pagination (center spans changed)
+        let metrics = Metrics::measure(&content, cell_w, cell_h, scale, output_mul, renderer, &bar.icons);
+        let mut frame = lay(&content, bar_w, bar_h as f32, track_pad, &metrics);
 
         // Nav transition: ease-in over 300ms
         let nav_fade = ease_out((nav_age.as_secs_f32() / 0.3).min(1.0));

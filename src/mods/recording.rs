@@ -110,9 +110,9 @@ impl InteractiveModule for RecordingDeep {
             vec![vec![Elem::text(format!("{} stop (x)", self.icon_stop)).fg(item_fg)]]
         } else {
             let items: Vec<(&str, String, &str)> = vec![
+                (&self.icon_record, "record (r)".into(), "r"),
                 (&self.icon_speaker, format!("audio: {}", if self.device_audio { "on" } else { "off" }), "a"),
                 (&self.icon_mic, format!("mic: {}", if self.mic_audio { "on" } else { "off" }), "m"),
-                (&self.icon_record, "record (r)".into(), "r"),
             ];
             items.iter().enumerate().map(|(i, (icon, label, _key))| {
                 let item_fg = if i == self.cursor { fg } else { idle_fg };
@@ -178,16 +178,16 @@ impl InteractiveModule for RecordingDeep {
                 } else {
                     match self.cursor {
                         0 => {
+                            start_recording(self.device_audio, self.mic_audio);
+                            KeyResult::Dismiss("recording".into())
+                        }
+                        1 => {
                             self.device_audio = !self.device_audio;
                             KeyResult::Handled
                         }
-                        1 => {
+                        2 => {
                             self.mic_audio = !self.mic_audio;
                             KeyResult::Handled
-                        }
-                        2 => {
-                            start_recording(self.device_audio, self.mic_audio);
-                            KeyResult::Dismiss("recording".into())
                         }
                         _ => KeyResult::Ignored,
                     }
@@ -195,6 +195,10 @@ impl InteractiveModule for RecordingDeep {
             }
             _ => KeyResult::Ignored,
         }
+    }
+
+    fn activate(&mut self, _data: &serde_json::Value) {
+        self.cursor = 0;
     }
 
     fn reset(&mut self) {

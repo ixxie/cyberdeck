@@ -1,4 +1,5 @@
 name = "Window"
+description = "Focused window info"
 icon = "app-window"
 
 [source]
@@ -7,8 +8,8 @@ kind = "window"
 interval = 1
 
 [badges.default]
-template = "{{ title | truncate(length=40) | dim }}"
-highlight = "{{ title | truncate(length=40) }}"
+template = "{{ title | dim }}"
+highlight = "{{ title }}"
 condition = "{{ title }}"
 
 [[hooks]]

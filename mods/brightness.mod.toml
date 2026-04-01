@@ -1,4 +1,5 @@
 name = "Brightness"
+description = "Screen brightness control"
 icon = "sun"
 
 [source]

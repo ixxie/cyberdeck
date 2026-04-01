@@ -35,6 +35,7 @@ pub fn poll(_params: &serde_json::Map<String, Value>) -> Value {
         "swap_used_bytes": swap_used,
         "swap_total_bytes": swap_total,
         "temp": temp,
+        "temp_icon": temp_icon(temp),
         "load": load,
     })
 }
@@ -74,6 +75,16 @@ fn read_cpu_times() -> Option<Vec<u64>> {
         .filter_map(|s| s.parse().ok())
         .collect();
     if vals.len() >= 4 { Some(vals) } else { None }
+}
+
+fn temp_icon(temp: i64) -> &'static str {
+    if temp >= 80 {
+        "thermometer-hot"
+    } else if temp <= 30 {
+        "thermometer-cold"
+    } else {
+        "thermometer-simple"
+    }
 }
 
 fn parse_meminfo() -> (u64, u64, u64, u64) {

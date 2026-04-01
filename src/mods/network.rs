@@ -29,16 +29,22 @@ pub fn subscribe(
             continue;
         };
 
-        let stdout = child.stdout.take().unwrap();
-        let reader = std::io::BufReader::new(stdout);
+        let mut stdout = child.stdout.take().unwrap();
+        let mut buf = [0u8; 4096];
 
-        for line in reader.lines() {
-            let Ok(_) = line else { break };
-            // Any output means network state changed
-            let val = poll(&params);
-            if sender.send((id.clone(), val)).is_err() {
-                let _ = child.kill();
-                return;
+        loop {
+            let n = match std::io::Read::read(&mut stdout, &mut buf) {
+                Ok(0) => break,
+                Ok(n) => n,
+                Err(_) => break,
+            };
+            // Any data means network state changed
+            if n > 0 {
+                let val = poll(&params);
+                if sender.send((id.clone(), val)).is_err() {
+                    let _ = child.kill();
+                    return;
+                }
             }
         }
 

@@ -1,4 +1,5 @@
 name = "System"
+description = "CPU, memory, and temperature"
 icon = "cpu"
 
 [source]
@@ -11,7 +12,7 @@ template = '{{ "cpu" | icon }}'
 condition = "{{ cpu_percent > 90 or temp > 90 }}"
 
 [widget]
-template = '{{ cpu_percent }}%  {{ "memory" | icon }} {{ mem_used_bytes | human_bytes }}/{{ mem_total_bytes | human_bytes }}{% if temp %}  {{ temp }}°C{% endif %}'
+template = '{{ "cpu" | icon }} {{ cpu_percent }}%|||{{ "memory" | icon }} {{ mem_used_bytes | human_bytes }}/{{ mem_total_bytes | human_bytes }}{% if swap_used_bytes > 0 %}|||{{ "swap-space" | icon }} {{ swap_used_bytes | human_bytes }}/{{ swap_total_bytes | human_bytes }}{% endif %}{% if temp %}|||{{ temp_icon | icon }} {{ temp }}°C{% endif %}|||{{ "gauge" | icon }} {{ load }}'
 
 [[key-hints]]
 key = "Esc"

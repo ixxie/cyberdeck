@@ -159,6 +159,14 @@ impl InteractiveModule for NotificationsDeep {
         }
     }
 
+    fn activate(&mut self, data: &serde_json::Value) {
+        self.cursor = self.notifs(data)
+            .and_then(|ns| ns.iter().position(|n| {
+                n.get("read").and_then(|v| v.as_bool()) == Some(false)
+            }))
+            .unwrap_or(0);
+    }
+
     fn reset(&mut self) {
         self.cursor = 0;
     }
