@@ -215,15 +215,18 @@ impl BarApp {
             if let Event::Msg(evt) = event {
                 match evt {
                     crate::notifications::NotifyEvent::New(n) => {
-                        let timeout_secs = if n.timeout_ms <= 0 { 5 } else {
-                            (n.timeout_ms as u64 + 999) / 1000
-                        };
-                        let text = if n.body.is_empty() {
-                            n.summary.clone()
-                        } else {
-                            format!("{} — {}", n.summary, n.body)
-                        };
-                        app.add_toast_with_pixmap(&text, Some(n.app_name.clone()), n.icon_pixmap.clone(), timeout_secs);
+                        let muted = crate::notifications::STORE.lock().unwrap().is_muted(&n.app_name);
+                        if !muted {
+                            let timeout_secs = if n.timeout_ms <= 0 { 5 } else {
+                                (n.timeout_ms as u64 + 999) / 1000
+                            };
+                            let text = if n.body.is_empty() {
+                                n.summary.clone()
+                            } else {
+                                format!("{} — {}", n.summary, n.body)
+                            };
+                            app.add_toast_with_pixmap(&text, Some(n.app_name.clone()), n.icon_pixmap.clone(), timeout_secs);
+                        }
                     }
                     crate::notifications::NotifyEvent::Close(_id) => {
                         // Notification dismissed via D-Bus; store already updated

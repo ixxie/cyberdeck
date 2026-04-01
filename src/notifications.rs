@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -23,8 +23,18 @@ pub struct Notification {
     pub read: bool,
 }
 
+/// Per-app notification group summary
+pub struct AppGroup {
+    pub app_name: String,
+    pub count: usize,
+    pub unread: usize,
+    pub icon_pixmap: Option<Arc<Pixmap>>,
+    pub muted: bool,
+}
+
 pub struct NotificationStore {
     notifications: VecDeque<Notification>,
+    muted_apps: HashSet<String>,
     next_id: u32,
 }
 
@@ -41,6 +51,7 @@ impl NotificationStore {
     const fn new() -> Self {
         Self {
             notifications: VecDeque::new(),
+            muted_apps: HashSet::new(),
             next_id: 1,
         }
     }
@@ -57,14 +68,34 @@ impl NotificationStore {
         id
     }
 
+    pub fn is_muted(&self, app_name: &str) -> bool {
+        self.muted_apps.contains(app_name)
+    }
+
     pub fn dismiss(&mut self, id: u32) {
         self.notifications.retain(|n| n.id != id);
+    }
+
+    pub fn dismiss_app(&mut self, app_name: &str) {
+        self.notifications.retain(|n| n.app_name != app_name);
     }
 
     pub fn mark_read(&mut self, id: u32) {
         if let Some(n) = self.notifications.iter_mut().find(|n| n.id == id) {
             n.read = true;
         }
+    }
+
+    pub fn mute(&mut self, app_name: &str) {
+        self.muted_apps.insert(app_name.to_string());
+    }
+
+    pub fn unmute(&mut self, app_name: &str) {
+        self.muted_apps.remove(app_name);
+    }
+
+    pub fn muted_apps(&self) -> &HashSet<String> {
+        &self.muted_apps
     }
 
     pub fn clear_all(&mut self) {
@@ -77,6 +108,42 @@ impl NotificationStore {
 
     pub fn all(&self) -> Vec<Notification> {
         self.notifications.iter().cloned().collect()
+    }
+
+    /// Group notifications by app, ordered by most recent first
+    pub fn by_app(&self) -> Vec<AppGroup> {
+        let mut groups: HashMap<&str, (usize, usize, Option<Arc<Pixmap>>)> = HashMap::new();
+        let mut order: Vec<&str> = Vec::new();
+
+        for n in &self.notifications {
+            let entry = groups.entry(&n.app_name).or_insert((0, 0, None));
+            entry.0 += 1;
+            if !n.read { entry.1 += 1; }
+            if entry.2.is_none() {
+                entry.2 = n.icon_pixmap.clone();
+            }
+            if !order.contains(&&*n.app_name) {
+                order.push(&n.app_name);
+            }
+        }
+
+        order.into_iter().map(|name| {
+            let (count, unread, icon_pixmap) = groups.remove(name).unwrap();
+            AppGroup {
+                app_name: name.to_string(),
+                count,
+                unread,
+                icon_pixmap,
+                muted: self.muted_apps.contains(name),
+            }
+        }).collect()
+    }
+
+    pub fn for_app(&self, app_name: &str) -> Vec<Notification> {
+        self.notifications.iter()
+            .filter(|n| n.app_name == app_name)
+            .cloned()
+            .collect()
     }
 }
 

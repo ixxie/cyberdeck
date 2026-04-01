@@ -12,6 +12,8 @@ pub fn poll(_params: &serde_json::Map<String, Value>) -> Value {
     let store = notifications::STORE.lock().unwrap();
     let count = store.unread_count();
     let all = store.all();
+    let groups = store.by_app();
+    let muted: Vec<String> = store.muted_apps().iter().cloned().collect();
     drop(store);
 
     let notifications: Vec<Value> = all.iter().map(|n| {
@@ -28,9 +30,20 @@ pub fn poll(_params: &serde_json::Map<String, Value>) -> Value {
         })
     }).collect();
 
+    let apps: Vec<Value> = groups.iter().map(|g| {
+        json!({
+            "app": g.app_name,
+            "count": g.count,
+            "unread": g.unread,
+            "muted": g.muted,
+        })
+    }).collect();
+
     json!({
         "count": count,
         "notifications": notifications,
+        "apps": apps,
+        "muted": muted,
     })
 }
 
