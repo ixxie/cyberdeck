@@ -177,7 +177,7 @@ fn location_opacity(location_age: Duration) -> f32 {
 fn location_elems(
     states: &HashMap<String, ModuleState>,
     template_engine: &TemplateEngine,
-    output_name: Option<&str>,
+    _output_name: Option<&str>,
     pal: Palette,
     location_age: Duration,
 ) -> Vec<Elem> {

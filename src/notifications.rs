@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -34,7 +34,7 @@ pub struct AppGroup {
 
 pub struct NotificationStore {
     notifications: VecDeque<Notification>,
-    muted_apps: HashSet<String>,
+    muted_apps: Vec<String>,
     next_id: u32,
 }
 
@@ -51,7 +51,7 @@ impl NotificationStore {
     const fn new() -> Self {
         Self {
             notifications: VecDeque::new(),
-            muted_apps: HashSet::new(),
+            muted_apps: Vec::new(),
             next_id: 1,
         }
     }
@@ -69,7 +69,7 @@ impl NotificationStore {
     }
 
     pub fn is_muted(&self, app_name: &str) -> bool {
-        self.muted_apps.contains(app_name)
+        self.muted_apps.iter().any(|a| a == app_name)
     }
 
     pub fn dismiss(&mut self, id: u32) {
@@ -87,14 +87,16 @@ impl NotificationStore {
     }
 
     pub fn mute(&mut self, app_name: &str) {
-        self.muted_apps.insert(app_name.to_string());
+        if !self.muted_apps.iter().any(|a| a == app_name) {
+            self.muted_apps.push(app_name.to_string());
+        }
     }
 
     pub fn unmute(&mut self, app_name: &str) {
-        self.muted_apps.remove(app_name);
+        self.muted_apps.retain(|a| a != app_name);
     }
 
-    pub fn muted_apps(&self) -> &HashSet<String> {
+    pub fn muted_apps(&self) -> &[String] {
         &self.muted_apps
     }
 
@@ -134,7 +136,7 @@ impl NotificationStore {
                 count,
                 unread,
                 icon_pixmap,
-                muted: self.muted_apps.contains(name),
+                muted: self.muted_apps.iter().any(|a| a == name),
             }
         }).collect()
     }

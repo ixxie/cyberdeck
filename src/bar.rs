@@ -164,8 +164,8 @@ pub struct BarApp {
     prev_focused_win: Option<(i64, i64)>,
     nav_toast_id: Option<u64>,
     pub location_changed: Instant,
-    hover_path: Option<String>,
-    hover_spotlight_id: Option<u64>,
+    pub(crate) hover_path: Option<String>,
+    pub(crate) hover_spotlight_id: Option<u64>,
 }
 
 pub struct Toast {
@@ -518,7 +518,7 @@ impl BarApp {
         self.prev_focused_win = cur_win;
     }
 
-    fn set_nav_toast(&mut self, elems: Vec<crate::layout::Elem>) -> u64 {
+    pub(crate) fn set_nav_toast(&mut self, elems: Vec<crate::layout::Elem>) -> u64 {
         let tid = NEXT_TOAST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let nav_tid = tid;
         let token = self.loop_handle.insert_source(
@@ -602,7 +602,7 @@ impl BarApp {
         self.dirty.set(true);
     }
 
-    fn remove_toast(&mut self, tid: u64) {
+    pub(crate) fn remove_toast(&mut self, tid: u64) {
         if let Some(pos) = self.toasts.iter().position(|t| t.toast_id == tid) {
             let old = self.toasts.remove(pos);
             // Token may already be removed if toast was paused; remove is a no-op then
@@ -613,7 +613,7 @@ impl BarApp {
     /// Pause all regular toasts by removing their calloop timers
     /// and recording remaining lifetime. Skips priority toasts (spotlight, nav)
     /// and already-paused toasts. Idempotent.
-    fn pause_regular_toasts(&mut self) {
+    pub(crate) fn pause_regular_toasts(&mut self) {
         let spotlight_id = self.spotlight_toast_id;
         let nav_id = self.nav_toast_id;
         let mut to_pause: Vec<(u64, RegistrationToken, Duration)> = Vec::new();
@@ -635,7 +635,7 @@ impl BarApp {
 
     /// Resume paused toasts by re-registering calloop timers with their
     /// remaining lifetime.
-    fn unpause_regular_toasts(&mut self) {
+    pub(crate) fn unpause_regular_toasts(&mut self) {
         let mut to_unpause: Vec<(u64, Duration)> = Vec::new();
         for t in &self.toasts {
             if let Some(remaining) = t.paused_remaining {

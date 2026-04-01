@@ -13,7 +13,7 @@ pub fn poll(_params: &serde_json::Map<String, Value>) -> Value {
     let count = store.unread_count();
     let all = store.all();
     let groups = store.by_app();
-    let muted: Vec<String> = store.muted_apps().iter().cloned().collect();
+    let muted: Vec<String> = store.muted_apps().to_vec();
     drop(store);
 
     let notifications: Vec<Value> = all.iter().map(|n| {
