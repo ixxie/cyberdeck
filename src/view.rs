@@ -173,14 +173,14 @@ fn location_opacity(location_age: Duration) -> f32 {
     }
 }
 
-/// Build the unified location pill: [monitor ·] workspace · window_title
-fn location_elems(
+/// Build location indicator as two pills: workspace number + window title
+fn location_spans(
     states: &HashMap<String, ModuleState>,
-    template_engine: &TemplateEngine,
-    _output_name: Option<&str>,
     pal: Palette,
     location_age: Duration,
-) -> Vec<Elem> {
+    bg: Rgba,
+    pc: &PillCfg,
+) -> Vec<Span> {
     let ws_data = states.get("workspaces").map(|s| &s.data);
     let win_data = states.get("window").map(|s| &s.data);
 
@@ -202,7 +202,7 @@ fn location_elems(
         .and_then(|d| d.get("title").and_then(|v| v.as_str()))
         .unwrap_or("");
 
-    // Opacity: bright active on recent change, dim idle otherwise
+    // Opacity: bright on recent change, dim otherwise
     let t = location_opacity(location_age);
     let bright = pal.active;
     let dim = pal.idle;
@@ -212,17 +212,11 @@ fn location_elems(
         bright.b,
         (dim.a as f32 + (bright.a as f32 - dim.a as f32) * t) as u8,
     );
-    let mut elems = Vec::new();
 
-    // Workspace number
-    elems.push(Elem::text(ws_idx.to_string()).fg(fg));
-
-    // Window title
-    if !title.is_empty() {
-        elems.push(Elem::text(title.to_string()).fg(fg));
-    }
-
-    elems
+    let mut spans = Vec::new();
+    spans.push(pill(vec![Elem::text(ws_idx.to_string()).fg(fg)], bg, pc));
+    spans.push(pill(vec![Elem::text(title.to_string()).fg(fg)], bg, pc));
+    spans
 }
 
 pub(crate) fn root_content(
@@ -284,10 +278,7 @@ pub(crate) fn root_content(
         }
     } else {
         // Location indicator as default center
-        let loc_elems = location_elems(&states_ref, template_engine, output_name, pal, location_age);
-        if !loc_elems.is_empty() {
-            center.push(pill(loc_elems, bg, pc));
-        }
+        center = location_spans(&states_ref, pal, location_age, bg, pc);
     }
 
     // Right: alert badges + per-app notification icons + clock
