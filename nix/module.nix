@@ -56,7 +56,9 @@ let
   } ''
     mkdir -p $out/bin
     makeWrapper ${cyberdeckUnwrapped}/bin/cyberdeck $out/bin/cyberdeck \
-      --prefix PATH : "${depsPath}"
+      --prefix PATH : "${depsPath}" \
+      --prefix LD_LIBRARY_PATH : "${pkgs.vulkan-loader}/lib" \
+      --prefix LD_LIBRARY_PATH : "/run/opengl-driver/lib"
     ln -s $out/bin/cyberdeck $out/bin/deck
   '';
 in

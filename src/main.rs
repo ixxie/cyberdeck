@@ -3,6 +3,8 @@ mod appicon;
 mod bar;
 mod cli;
 mod color;
+mod gpu;
+mod gpu_render;
 mod nav;
 mod config;
 mod layout;
@@ -56,6 +58,8 @@ fn main() {
         .expect("failed to init registry");
     let qh = event_queue.handle();
 
+    let gpu_state = gpu::GpuState::new();
+
     let mut event_loop: EventLoop<bar::BarApp> =
         EventLoop::try_new().expect("failed to create event loop");
     let loop_handle = event_loop.handle();
@@ -66,7 +70,7 @@ fn main() {
 
     ipc::register_listener(&loop_handle);
 
-    let mut app = bar::BarApp::new(config, &globals, &qh, &loop_handle);
+    let mut app = bar::BarApp::new(config, &globals, &qh, &loop_handle, gpu_state);
 
     while RUNNING.load(Ordering::Relaxed) {
         if let Err(e) = event_loop.dispatch(std::time::Duration::from_millis(16), &mut app) {

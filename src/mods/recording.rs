@@ -33,7 +33,19 @@ fn slurp_region() -> Option<String> {
     if s.is_empty() { None } else { Some(s) }
 }
 
-pub fn start_recording(device_audio: bool, _mic_audio: bool) {
+fn default_mic_source() -> Option<String> {
+    let out = Command::new("pactl")
+        .args(["get-default-source"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if s.is_empty() { None } else { Some(s) }
+}
+
+pub fn start_recording(device_audio: bool, mic_audio: bool) {
     if is_recording() { return; }
 
     std::thread::spawn(move || {
@@ -47,8 +59,13 @@ pub fn start_recording(device_audio: bool, _mic_audio: bool) {
 
         let mut cmd = Command::new("wl-screenrec");
         cmd.args(["-f", &path, "-g", &region]);
-        if device_audio {
+        if device_audio || mic_audio {
             cmd.arg("--audio");
+        }
+        if mic_audio && !device_audio {
+            if let Some(src) = default_mic_source() {
+                cmd.args(["--audio-device", &src]);
+            }
         }
 
         let Ok(mut child) = cmd.spawn() else {

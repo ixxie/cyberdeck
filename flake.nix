@@ -26,6 +26,8 @@
           libxkbcommon
           fontconfig
           freetype
+          vulkan-loader
+          libGL
         ];
 
         extraFilter = path: _type:

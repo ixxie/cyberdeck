@@ -4,7 +4,6 @@ use taffy::prelude::*;
 use taffy::style::Overflow;
 use taffy::geometry::Point as TaffyPoint;
 use tiny_skia::Pixmap;
-use unicode_width::UnicodeWidthChar;
 
 use crate::color::Rgba;
 use crate::icons::IconSet;
@@ -17,11 +16,13 @@ pub struct Elem {
     pub fg: Rgba,
     pub icon: Option<Arc<Pixmap>>,
     pub path: Option<String>,
+    pub font_scale: f32,
+    pub y_offset: f32,
 }
 
 impl Elem {
     pub fn text(text: impl Into<String>) -> Self {
-        Self { text: text.into(), fg: Rgba::default(), icon: None, path: None }
+        Self { text: text.into(), fg: Rgba::default(), icon: None, path: None, font_scale: 1.0, y_offset: 0.0 }
     }
 
     pub fn fg(mut self, fg: Rgba) -> Self {
@@ -36,6 +37,16 @@ impl Elem {
 
     pub fn path(mut self, p: impl Into<String>) -> Self {
         self.path = Some(p.into());
+        self
+    }
+
+    pub fn font_scale(mut self, s: f32) -> Self {
+        self.font_scale = s;
+        self
+    }
+
+    pub fn y_offset(mut self, y: f32) -> Self {
+        self.y_offset = y;
         self
     }
 }
@@ -116,6 +127,8 @@ pub struct FElem {
     pub text: String,
     pub fg: Rgba,
     pub icon: Option<Arc<Pixmap>>,
+    pub font_scale: f32,
+    pub y_offset: f32,
 }
 
 pub struct FSpan {
@@ -181,11 +194,11 @@ impl Metrics {
             let n = span.elems.len();
             let mut content_w = 0.0;
             for elem in &span.elems {
-                let icon_gap = cell_w;
+                let icon_gap = if elem.font_scale < 1.0 { cell_w * 0.15 } else { cell_w };
                 let icon_w = elem.icon.as_ref()
                     .map(|pm| pm.width() as f32 / scale + icon_gap)
                     .unwrap_or(0.0);
-                let text_w = renderer.measure_text(&elem.text, icons, scale, font_scale);
+                let text_w = renderer.measure_text(&elem.text, icons, scale, font_scale * elem.font_scale);
                 let ew = icon_w + text_w;
                 elem_widths.push(ew);
                 content_w += ew;
@@ -394,6 +407,8 @@ pub fn lay(content: &BarContent, bar_w: f32, bar_h: f32, track_pad: f32, m: &Met
                 text: elem.text.clone(),
                 fg: elem.fg,
                 icon: elem.icon.clone(),
+                font_scale: elem.font_scale,
+                y_offset: elem.y_offset,
             });
 
             if src_span.path.is_none() {

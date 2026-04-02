@@ -40,12 +40,10 @@ use smithay_client_toolkit::shell::wlr_layer::{
 use smithay_client_toolkit::shm::slot::SlotPool;
 use smithay_client_toolkit::shm::{Shm, ShmHandler};
 
-use tiny_skia::Pixmap;
-
-
 use crate::color::Rgba;
+use crate::gpu::{GpuState, GpuTarget};
 use crate::config::{Config, ModuleDef, Position};
-use crate::layout::{BarContent, Frame, Metrics, lay};
+use crate::layout::{Frame, Metrics, lay};
 use crate::mods::InteractiveModule;
 use crate::render::Renderer;
 use crate::icons::IconSet;
@@ -64,6 +62,7 @@ pub use crate::nav::{DisplayMode, NavState};
 pub struct BarInstance {
     pub layer_surface: LayerSurface,
     pub pool: SlotPool,
+    pub gpu_target: GpuTarget,
     pub icons: IconSet,
     pub width: u32,
     pub scale: i32,
@@ -119,6 +118,7 @@ impl BarInstance {
         Self {
             layer_surface,
             pool,
+            gpu_target: GpuTarget::new(),
             icons,
             width: 0,
             scale: initial_scale,
@@ -137,6 +137,7 @@ pub struct BarApp {
     pub compositor: CompositorState,
     pub shm: Shm,
     pub layer_shell: LayerShell,
+    pub gpu: GpuState,
 
     pub config: Config,
     pub renderer: Renderer,
@@ -161,11 +162,12 @@ pub struct BarApp {
     pub nav_changed: Instant,
     pub icon_map: HashMap<String, String>,
     prev_focused_ws: Option<i64>,
-    prev_focused_win: Option<(i64, i64)>,
+    prev_focused_win: Option<(String, String)>,
     nav_toast_id: Option<u64>,
     pub location_changed: Instant,
     pub(crate) hover_path: Option<String>,
     pub(crate) hover_spotlight_id: Option<u64>,
+    pub(crate) ws_rename: Option<String>,
 }
 
 pub struct Toast {
@@ -190,6 +192,7 @@ impl BarApp {
         globals: &GlobalList,
         qh: &QueueHandle<Self>,
         loop_handle: &LoopHandle<'static, Self>,
+        gpu: GpuState,
     ) -> Self {
         let compositor = CompositorState::bind(globals, qh).expect("wl_compositor not available");
         let shm = Shm::bind(globals, qh).expect("wl_shm not available");
@@ -256,6 +259,7 @@ impl BarApp {
             compositor,
             shm,
             layer_shell,
+            gpu,
             config,
             renderer,
             template_engine,
@@ -289,6 +293,7 @@ impl BarApp {
             location_changed: Instant::now(),
             hover_path: None,
             hover_spotlight_id: None,
+            ws_rename: None,
         }
     }
 
@@ -326,6 +331,22 @@ impl BarApp {
         self.dirty.set(true);
     }
 
+    /// Update keyboard interactivity based on current nav/rename state.
+    pub fn update_keyboard(&mut self) {
+        let needs_kb = self.ws_rename.is_some()
+            || !self.nav.stack.is_empty()
+            || !matches!(self.nav.mode, DisplayMode::Visual);
+        for bar in self.bars.values() {
+            let interactivity = if needs_kb {
+                KeyboardInteractivity::Exclusive
+            } else {
+                KeyboardInteractivity::None
+            };
+            bar.layer_surface.set_keyboard_interactivity(interactivity);
+            bar.layer_surface.wl_surface().commit();
+        }
+    }
+
     pub fn set_layout(&mut self, layout: crate::config::Layout) {
         self.config.settings.layout = layout;
         self.apply_style();
@@ -358,9 +379,8 @@ impl BarApp {
         if !self.dirty.get() {
             return;
         }
-        self.check_ws_changes();
+        self.check_niri_changes();
         self.process_hooks();
-        let qh = self.qh.clone();
         let nav_age = self.nav_changed.elapsed();
         let location_age = self.location_changed.elapsed();
         let ids: Vec<u32> = self.bars.keys().copied().collect();
@@ -370,11 +390,12 @@ impl BarApp {
                 if bar.configured && bar.width > 0 {
                     Self::draw_bar(
                         bar, &self.config, &mut self.renderer,
-                        &self.template_engine, &self.states, &qh,
-                        &mut self.nav, &mut self.root_scroll,
+                        &self.template_engine, &self.states, &mut self.gpu,
+                        &self.qh, &mut self.nav, &mut self.root_scroll,
                         &self.toasts, &self.badge_overrides,
                         &self.interactive,
                         nav_age, location_age,
+                        self.ws_rename.as_deref(),
                     );
                     drew = true;
                 }
@@ -480,29 +501,35 @@ impl BarApp {
         }
     }
 
-    /// Detect workspace/window focus changes and update location_changed timestamp.
-    fn check_ws_changes(&mut self) {
+    /// Detect niri focus changes: update location indicator and optionally defocus the bar.
+    fn check_niri_changes(&mut self) {
         let states = self.states.borrow();
-        let Some(ws_state) = states.get("workspaces") else { return };
-        if !ws_state.dirty { return; }
-        let data = &ws_state.data;
+        let ws_dirty = states.get("workspaces").map(|s| s.dirty).unwrap_or(false);
+        let win_dirty = states.get("window").map(|s| s.dirty).unwrap_or(false);
+        if !ws_dirty && !win_dirty { return; }
 
-        let workspaces = data.get("workspaces").and_then(|v| v.as_array());
-        let windows = data.get("windows").and_then(|v| v.as_array());
+        // Workspace focus from workspaces module
+        let ws_data = states.get("workspaces").map(|s| &s.data);
+        let workspaces = ws_data.and_then(|d| d.get("workspaces")).and_then(|v| v.as_array());
 
         let cur_ws = workspaces.and_then(|wss| {
             wss.iter().find(|ws| ws.get("focused").and_then(|v| v.as_bool()).unwrap_or(false))
                 .and_then(|ws| ws.get("id").and_then(|v| v.as_i64()))
         });
 
-        let cur_win = windows.and_then(|wins| {
-            wins.iter().find(|w| w.get("focused").and_then(|v| v.as_bool()).unwrap_or(false))
-                .map(|w| {
-                    let col = w.get("col").and_then(|v| v.as_i64()).unwrap_or(0);
-                    let row = w.get("row").and_then(|v| v.as_i64()).unwrap_or(0);
-                    (col, row)
-                })
-        });
+        // Window focus from window module (title + app_id identify the focused window)
+        let win_data = states.get("window").map(|s| &s.data);
+        let cur_win_title = win_data
+            .and_then(|d| d.get("title").and_then(|v| v.as_str()))
+            .unwrap_or("");
+        let cur_win_app = win_data
+            .and_then(|d| d.get("app_id").and_then(|v| v.as_str()))
+            .unwrap_or("");
+        let cur_win = if cur_win_title.is_empty() && cur_win_app.is_empty() {
+            None
+        } else {
+            Some((cur_win_title.to_string(), cur_win_app.to_string()))
+        };
 
         let ws_changed = cur_ws.is_some() && self.prev_focused_ws.is_some()
             && cur_ws != self.prev_focused_ws;
@@ -516,6 +543,17 @@ impl BarApp {
 
         self.prev_focused_ws = cur_ws;
         self.prev_focused_win = cur_win;
+
+        // Defocus bar when niri focus changes (but not during rename — that's intentional)
+        if (ws_changed || win_changed) && self.config.settings.defocus_on_niri_events {
+            let has_kb = !self.nav.stack.is_empty()
+                || !matches!(self.nav.mode, DisplayMode::Visual);
+            if has_kb && self.ws_rename.is_none() {
+                log::info!("defocusing bar: niri focus changed");
+                drop(states);
+                self.set_nav(NavState::new());
+            }
+        }
     }
 
     pub(crate) fn set_nav_toast(&mut self, elems: Vec<crate::layout::Elem>) -> u64 {
@@ -723,6 +761,7 @@ impl BarApp {
         renderer: &mut Renderer,
         template_engine: &TemplateEngine,
         states: &Rc<std::cell::RefCell<HashMap<String, ModuleState>>>,
+        gpu: &mut GpuState,
         qh: &QueueHandle<BarApp>,
         nav: &mut NavState,
         root_scroll: &mut usize,
@@ -731,6 +770,7 @@ impl BarApp {
         interactive: &HashMap<String, Box<dyn InteractiveModule>>,
         nav_age: Duration,
         location_age: Duration,
+        ws_rename: Option<&str>,
     ) {
         if bar.width == 0 {
             return;
@@ -768,7 +808,7 @@ impl BarApp {
 
         // Build content (views return raw spans, no pagination)
         let mut content = if nav.stack.is_empty() && matches!(nav.mode, DisplayMode::Visual) {
-            crate::view::root_content(config, template_engine, states, pal, output_name, badge_overrides, toasts, location_age, gap, pill_bg, &pc)
+            crate::view::root_content(config, template_engine, states, pal, output_name, badge_overrides, toasts, location_age, gap, pill_bg, &pc, ws_rename)
         } else {
             match nav.mode {
                 DisplayMode::Visual => {
@@ -821,28 +861,43 @@ impl BarApp {
         let scale = bar.scale as u32;
         let phys_w = bar.width * scale;
         let phys_h = bar_h * scale;
-        let mut pixmap = Pixmap::new(phys_w.max(1), phys_h.max(1)).expect("failed to create pixmap");
-        renderer.render_frame(&frame, &mut pixmap, &bar.icons, surface_bg, bar.scale, output_mul);
+
+        // Build vello scene from frame
+        let mut scene = vello::Scene::new();
+        let base_color = crate::gpu_render::build_scene(
+            &mut scene, &frame, renderer, &bar.icons,
+            surface_bg, bar.scale, output_mul,
+        );
 
         bar.frame = Some(frame);
 
-        let stride = phys_w as i32 * 4;
-        let format = smithay_client_toolkit::reexports::client::protocol::wl_shm::Format::Argb8888;
-        let (buffer, canvas) = bar.pool
-            .create_buffer(phys_w as i32, phys_h as i32, stride, format)
-            .expect("failed to create buffer");
+        let pw = phys_w.max(1);
+        let ph = phys_h.max(1);
+        bar.gpu_target.resize(gpu, pw, ph);
 
-        Renderer::copy_to_wl_buffer(&pixmap, canvas);
+        // GPU render → read back pixels → SHM display
+        let pixels = bar.gpu_target.render_to_pixels(gpu, &scene, base_color);
+        if pixels.is_none() {
+            log::warn!("gpu: render_to_pixels returned None");
+        }
+        if let Some(pixels) = pixels {
+            let stride = pw as i32 * 4;
+            let format = smithay_client_toolkit::reexports::client::protocol::wl_shm::Format::Argb8888;
+            let (buffer, canvas) = bar.pool
+                .create_buffer(pw as i32, ph as i32, stride, format)
+                .expect("failed to create buffer");
 
-        bar.layer_surface.set_size(0, bar_h);
-        let exclusive = bar_h as i32;
-        bar.layer_surface.set_exclusive_zone(exclusive);
-        bar.layer_surface.wl_surface().set_buffer_scale(bar.scale);
-        bar.layer_surface.wl_surface().attach(Some(buffer.wl_buffer()), 0, 0);
-        bar.layer_surface.wl_surface().damage_buffer(0, 0, phys_w as i32, phys_h as i32);
-        bar.layer_surface.wl_surface().commit();
+            canvas[..pixels.len()].copy_from_slice(&pixels);
 
-        bar.layer_surface.wl_surface().frame(qh, bar.layer_surface.wl_surface().clone());
+            bar.layer_surface.set_size(0, bar_h);
+            bar.layer_surface.set_exclusive_zone(bar_h as i32);
+            bar.layer_surface.wl_surface().set_buffer_scale(bar.scale);
+            bar.layer_surface.wl_surface().attach(Some(buffer.wl_buffer()), 0, 0);
+            bar.layer_surface.wl_surface().damage_buffer(0, 0, pw as i32, ph as i32);
+            bar.layer_surface.wl_surface().commit();
+
+            bar.layer_surface.wl_surface().frame(qh, bar.layer_surface.wl_surface().clone());
+        }
     }
 
     pub(crate) fn bar_id_for_surface(&self, surface: &WlSurface) -> Option<u32> {
