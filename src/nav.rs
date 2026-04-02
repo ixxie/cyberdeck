@@ -50,10 +50,47 @@ impl NavState {
 
 impl BarApp {
     pub(crate) fn handle_key(&mut self, event: KeyEvent) {
+        // Intercept keys during workspace rename
+        if let Some(ref mut query) = self.ws_rename {
+            match event.keysym {
+                Keysym::Return => {
+                    let name = query.clone();
+                    if name.is_empty() {
+                        Self::spawn_command("niri msg action unset-workspace-name");
+                    } else {
+                        Self::spawn_command(&format!(
+                            "niri msg action set-workspace-name \"{}\"",
+                            name.replace('"', "\\\""),
+                        ));
+                    }
+                    self.ws_rename = None;
+                    self.cancel_ws_rename_kb();
+                }
+                Keysym::Escape => {
+                    self.ws_rename = None;
+                    self.cancel_ws_rename_kb();
+                }
+                Keysym::BackSpace => { query.pop(); }
+                _ => {
+                    if let Some(ref utf8) = event.utf8 {
+                        if !utf8.contains('\x1b') {
+                            query.push_str(utf8);
+                        }
+                    }
+                }
+            }
+            self.dirty.set(true);
+            return;
+        }
+
         match self.nav.mode {
             DisplayMode::Visual => self.handle_visual_key(event),
             DisplayMode::Text => self.handle_text_key(event),
         }
+    }
+
+    fn cancel_ws_rename_kb(&mut self) {
+        self.update_keyboard();
     }
 
     fn handle_visual_key(&mut self, event: KeyEvent) {
@@ -276,6 +313,18 @@ impl BarApp {
             return;
         }
 
+        if path == "workspace" {
+            if ctrl {
+                let name = self.focused_ws_name();
+                self.ws_rename = Some(name);
+                self.update_keyboard();
+                self.dirty.set(true);
+            } else {
+                Self::spawn_command("niri msg action toggle-overview");
+            }
+            return;
+        }
+
         if path == "__scroll_left" {
             self.nav.scroll = self.nav.scroll.saturating_sub(1);
             self.dirty.set(true);
@@ -331,37 +380,52 @@ impl BarApp {
 
         self.hover_path = path.clone();
 
-        // Hover over per-app notification icon → show toasts as spotlight
         if let Some(ref p) = path {
-            if let Some(app_name) = p.strip_prefix("__notif_app:") {
+            let elems = if let Some(app_name) = p.strip_prefix("__notif_app:") {
+                // Hover over per-app notification icon → show notification summaries
                 let store = crate::notifications::STORE.lock().unwrap();
                 let notifs = store.for_app(app_name);
                 drop(store);
 
-                if !notifs.is_empty() {
-                    let mut elems = Vec::new();
-                    // Show app name + recent notification summaries
-                    for n in notifs.iter().take(3) {
-                        let text = if n.body.is_empty() {
-                            n.summary.clone()
-                        } else {
-                            format!("{} — {}", n.summary, n.body)
-                        };
-                        let mut elem = crate::layout::Elem::text(text);
-                        if let Some(ref pm) = n.icon_pixmap {
-                            elem = elem.icon(pm.clone());
-                        }
-                        elems.push(elem);
+                let mut elems = Vec::new();
+                for n in notifs.iter().take(3) {
+                    let text = if n.body.is_empty() {
+                        n.summary.clone()
+                    } else {
+                        format!("{} — {}", n.summary, n.body)
+                    };
+                    let mut elem = crate::layout::Elem::text(text);
+                    if let Some(ref pm) = n.icon_pixmap {
+                        elem = elem.icon(pm.clone());
                     }
-                    if notifs.len() > 3 {
-                        let more = format!("+{} more", notifs.len() - 3);
-                        elems.push(crate::layout::Elem::text(more));
-                    }
-                    let tid = self.set_nav_toast(elems);
-                    self.hover_spotlight_id = Some(tid);
-                    self.spotlight_toast_id = Some(tid);
-                    self.pause_regular_toasts();
+                    elems.push(elem);
                 }
+                if notifs.len() > 3 {
+                    let more = format!("+{} more", notifs.len() - 3);
+                    elems.push(crate::layout::Elem::text(more));
+                }
+                elems
+            } else if let Some(module) = self.config.bar.modules.get(p.as_str()) {
+                // Hover over any module badge → show widget preview
+                if let Some(ref widget) = module.widget {
+                    let states = self.states.borrow();
+                    let data = states.get(p.as_str())
+                        .map(|s| s.data.clone())
+                        .unwrap_or(serde_json::Value::Null);
+                    drop(states);
+                    self.template_engine.render_widget(p, widget, &data, None)
+                } else {
+                    Vec::new()
+                }
+            } else {
+                Vec::new()
+            };
+
+            if !elems.is_empty() {
+                let tid = self.set_nav_toast(elems);
+                self.hover_spotlight_id = Some(tid);
+                self.spotlight_toast_id = Some(tid);
+                self.pause_regular_toasts();
             }
         }
     }
@@ -410,6 +474,23 @@ impl BarApp {
                 log::warn!("niri spawn failed: {e}, falling back to direct spawn");
                 Self::spawn_command(exec);
             }
+        }
+    }
+
+    /// Get the display name of the currently focused workspace.
+    fn focused_ws_name(&self) -> String {
+        let states = self.states.borrow();
+        let Some(ws_state) = states.get("workspaces") else { return String::new() };
+        let workspaces = ws_state.data.get("workspaces").and_then(|v| v.as_array());
+        let focused = workspaces.and_then(|wss| {
+            wss.iter().find(|ws| ws.get("focused").and_then(|v| v.as_bool()).unwrap_or(false))
+        });
+        let idx = focused.and_then(|ws| ws.get("idx").and_then(|v| v.as_i64())).unwrap_or(1);
+        let name = focused.and_then(|ws| ws.get("name").and_then(|v| v.as_str())).unwrap_or("");
+        if !name.is_empty() && name != idx.to_string() {
+            name.to_string()
+        } else {
+            String::new()
         }
     }
 

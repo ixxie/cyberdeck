@@ -107,7 +107,11 @@ pub struct Settings {
     pub icon_weight: String,
     #[serde(default)]
     pub monitors: HashMap<String, MonitorCfg>,
+    #[serde(default = "default_true")]
+    pub defocus_on_niri_events: bool,
 }
+
+fn default_true() -> bool { true }
 
 impl Settings {
     pub fn margin(&self) -> f32 {
@@ -330,6 +334,8 @@ struct RuntimeSettings {
     icon_weight: String,
     #[serde(default)]
     monitors: HashMap<String, MonitorCfg>,
+    #[serde(default = "default_true")]
+    defocus_on_niri_events: bool,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -435,6 +441,7 @@ impl Config {
                     icons_dir: runtime.settings.icons_dir,
                     icon_weight: runtime.settings.icon_weight,
                     monitors: runtime.settings.monitors,
+                    defocus_on_niri_events: runtime.settings.defocus_on_niri_events,
                 },
                 bar: BarDef {
                     modules,

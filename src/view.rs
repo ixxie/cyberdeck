@@ -173,17 +173,21 @@ fn location_opacity(location_age: Duration) -> f32 {
     }
 }
 
-/// Build location indicator as two pills: workspace number + window title
-fn location_spans(
+/// Build workspace pill for the left zone (always visible, clickable).
+/// During rename, shows editable query with cursor.
+fn workspace_pill(
     states: &HashMap<String, ModuleState>,
     pal: Palette,
-    location_age: Duration,
     bg: Rgba,
     pc: &PillCfg,
-) -> Vec<Span> {
-    let ws_data = states.get("workspaces").map(|s| &s.data);
-    let win_data = states.get("window").map(|s| &s.data);
+    rename_query: Option<&str>,
+) -> Span {
+    if let Some(query) = rename_query {
+        let text = format!("{query}|");
+        return pill(vec![Elem::text(text).fg(pal.selected)], bg, pc).path("workspace");
+    }
 
+    let ws_data = states.get("workspaces").map(|s| &s.data);
     let workspaces = ws_data
         .and_then(|d| d.get("workspaces"))
         .and_then(|v| v.as_array());
@@ -197,12 +201,36 @@ fn location_spans(
     let ws_idx = focused_ws
         .and_then(|ws| ws.get("idx").and_then(|v| v.as_i64()))
         .unwrap_or(1);
+    let ws_name = focused_ws
+        .and_then(|ws| ws.get("name").and_then(|v| v.as_str()))
+        .unwrap_or("");
 
+    let label = if !ws_name.is_empty() && ws_name != ws_idx.to_string() {
+        ws_name.to_string()
+    } else {
+        format!("workspace {ws_idx}")
+    };
+
+    pill(vec![Elem::text(label).fg(pal.active)], bg, pc).path("workspace")
+}
+
+/// Build window title pill for the center zone (fades with location age).
+fn title_pill(
+    states: &HashMap<String, ModuleState>,
+    pal: Palette,
+    location_age: Duration,
+    bg: Rgba,
+    pc: &PillCfg,
+) -> Option<Span> {
+    let win_data = states.get("window").map(|s| &s.data);
     let title = win_data
         .and_then(|d| d.get("title").and_then(|v| v.as_str()))
         .unwrap_or("");
 
-    // Opacity: bright on recent change, dim otherwise
+    if title.is_empty() {
+        return None;
+    }
+
     let t = location_opacity(location_age);
     let bright = pal.active;
     let dim = pal.idle;
@@ -213,10 +241,7 @@ fn location_spans(
         (dim.a as f32 + (bright.a as f32 - dim.a as f32) * t) as u8,
     );
 
-    let mut spans = Vec::new();
-    spans.push(pill(vec![Elem::text(ws_idx.to_string()).fg(fg)], bg, pc));
-    spans.push(pill(vec![Elem::text(title.to_string()).fg(fg)], bg, pc));
-    spans
+    Some(pill(vec![Elem::text(title.to_string()).fg(fg)], bg, pc))
 }
 
 pub(crate) fn root_content(
@@ -231,6 +256,7 @@ pub(crate) fn root_content(
     gap: f32,
     bg: Rgba,
     pc: &PillCfg,
+    ws_rename: Option<&str>,
 ) -> BarContent {
     let states_ref = states.borrow();
 
@@ -250,9 +276,12 @@ pub(crate) fn root_content(
         elems
     };
 
-    // Left: launcher icon only
+    // Left: launcher icon + workspace pill
     let launcher_icon = template_engine.render_icon("terminal");
-    let left = vec![pill(vec![Elem::text(launcher_icon).fg(pal.selected)], bg, pc).path("launcher")];
+    let left = vec![
+        pill(vec![Elem::text(launcher_icon).fg(pal.selected)], bg, pc).path("launcher"),
+        workspace_pill(&states_ref, pal, bg, pc, ws_rename),
+    ];
 
     // Center: toasts override location indicator
     let mut center = Vec::new();
@@ -277,8 +306,10 @@ pub(crate) fn root_content(
             }
         }
     } else {
-        // Location indicator as default center
-        center = location_spans(&states_ref, pal, location_age, bg, pc);
+        // Window title as default center
+        if let Some(tp) = title_pill(&states_ref, pal, location_age, bg, pc) {
+            center.push(tp);
+        }
     }
 
     // Right: alert badges + per-app notification icons + clock
@@ -311,7 +342,11 @@ pub(crate) fn root_content(
             elems.push(Elem::text(icon).fg(fg));
         }
         if group.unread > 1 {
-            elems.push(Elem::text(group.unread.to_string()).fg(fg));
+            if let Some(last) = elems.last_mut() {
+                last.text = group.unread.to_string();
+                last.font_scale = 0.7;
+                last.y_offset = -4.0;
+            }
         }
         let path = format!("__notif_app:{}", group.app_name);
         right.push(pill(elems, bg, pc).path(&path));

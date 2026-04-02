@@ -30,7 +30,13 @@ pub fn build_cli() -> Command {
         .subcommand(Command::new("state").about("Print bar state as JSON"))
         .subcommand(Command::new("style").about("Set bar style at runtime")
             .arg(Arg::new("name").required(true)
-                .help("classic, floating, pills, or transparent")));
+                .help("classic, floating, pills, or transparent")))
+        .subcommand(Command::new("workspace").about("Workspace commands (alias for workspaces)")
+            .subcommand(Command::new("overview").about("overview"))
+            .subcommand(Command::new("rename").about("rename"))
+            .subcommand(Command::new("focus").about("focus"))
+            .subcommand(Command::new("open").about("Open in bar"))
+            .arg(Arg::new("args").num_args(..).trailing_var_arg(true)));
 
     for (id, name, cmds) in MOD_META {
         let mut sub = Command::new(*id)
@@ -76,7 +82,12 @@ pub fn parse() -> Cli {
             Some(Cmd::Style(name))
         }
         Some((name, sub)) => {
-            let mut args = vec![name.to_string()];
+            // Resolve singular aliases to module names
+            let module_name = match name {
+                "workspace" => "workspaces",
+                other => other,
+            };
+            let mut args = vec![module_name.to_string()];
             if let Some((action, _)) = sub.subcommand() {
                 args.push(action.to_string());
             } else if let Some(vals) = sub.get_many::<String>("args") {

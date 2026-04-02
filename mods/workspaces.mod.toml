@@ -9,3 +9,18 @@ interval = 1
 
 [badges.default]
 template = '{% for ws in workspaces %}{% if ws.output == __output %}{% if ws.active %}{{ "hexagon" | icon }}{% else %}{{ "hexagon" | icon | dim }}{% endif %}{% if not loop.last %} {% endif %}{% endif %}{% endfor %}'
+
+[[actions]]
+name = "overview"
+run = "niri msg action toggle-overview"
+label = "overview"
+
+[[actions]]
+name = "rename"
+run = "native"
+label = "rename"
+
+[[actions]]
+name = "focus"
+run = "native"
+label = "focus"

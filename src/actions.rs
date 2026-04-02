@@ -51,6 +51,36 @@ pub fn exec_native(
 
         ("notifications", "clear") => ActionResult::BarOnly,
 
+        ("workspaces", "rename") => {
+            let name = args.join(" ");
+            let status = if name.is_empty() {
+                std::process::Command::new("niri")
+                    .args(["msg", "action", "unset-workspace-name"])
+                    .status()
+            } else {
+                std::process::Command::new("niri")
+                    .args(["msg", "action", "set-workspace-name", &name])
+                    .status()
+            };
+            match status {
+                Ok(s) if s.success() => {
+                    let toast = if name.is_empty() { "name cleared".into() } else { format!("renamed: {name}") };
+                    ActionResult::Ok { toast }
+                }
+                _ => ActionResult::Ok { toast: "rename failed".into() },
+            }
+        }
+        ("workspaces", "focus") => {
+            let idx = args.first().map(|s| s.as_str()).unwrap_or("1");
+            let status = std::process::Command::new("niri")
+                .args(["msg", "action", "focus-workspace", idx])
+                .status();
+            match status {
+                Ok(s) if s.success() => ActionResult::Ok { toast: format!("workspace {idx}") },
+                _ => ActionResult::Ok { toast: "focus failed".into() },
+            }
+        }
+
         _ => ActionResult::Unknown,
     }
 }
