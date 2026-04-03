@@ -726,10 +726,37 @@ impl BarApp {
             return;
         }
 
-        // Replace previous spotlight toast
-        if let Some(tid) = self.spotlight_toast_id.take() {
-            self.remove_toast(tid);
+        // Update existing spotlight toast in-place to avoid flicker
+        if let Some(tid) = self.spotlight_toast_id {
+            if let Some(toast) = self.toasts.iter_mut().find(|t| t.toast_id == tid) {
+                toast.elems = elems;
+                toast.created = Instant::now();
+                // Reset the expiry timer
+                self.loop_handle.remove(toast.token.clone());
+                let nav_tid = tid;
+                toast.token = self.loop_handle.insert_source(
+                    Timer::from_duration(Duration::from_secs(2)),
+                    move |_, _, app| {
+                        app.remove_toast(nav_tid);
+                        if app.spotlight_toast_id == Some(nav_tid) {
+                            app.spotlight_toast_id = None;
+                        }
+                        if app.nav_toast_id == Some(nav_tid) {
+                            app.nav_toast_id = None;
+                        }
+                        if app.spotlight_toast_id.is_none() && app.nav_toast_id.is_none() {
+                            app.unpause_regular_toasts();
+                        }
+                        app.dirty.set(true);
+                        TimeoutAction::Drop
+                    },
+                ).expect("failed to reset spotlight timer");
+                self.dirty.set(true);
+                return;
+            }
         }
+
+        // No existing spotlight — create new
         let tid = self.set_nav_toast(elems);
         self.spotlight_toast_id = Some(tid);
         self.pause_regular_toasts();
@@ -844,6 +871,7 @@ impl BarApp {
         content.center = crate::view::paginate_spans(
             content.center, selected, scroll, center_avail,
             left_n, &metrics, template_engine, gap, pill_bg, pal.idle, &pc,
+            config.settings.wrap_nav,
         );
 
         // Re-measure after pagination (center spans changed)

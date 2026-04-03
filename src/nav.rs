@@ -203,11 +203,16 @@ impl BarApp {
             return;
         }
 
-        // Left/Right: cycle selection
+        // Left/Right: move selection
         if event.keysym == Keysym::Right {
             let count = crate::view::text_match_count(&self.nav, &self.config, &self.states);
             if count > 0 {
-                self.nav.selected = (self.nav.selected + 1) % count;
+                if self.nav.selected + 1 < count {
+                    self.nav.selected += 1;
+                } else if self.config.settings.wrap_nav {
+                    self.nav.selected = 0;
+                    self.nav.scroll = 0;
+                }
                 self.dirty.set(true);
             }
             return;
@@ -216,7 +221,12 @@ impl BarApp {
         if event.keysym == Keysym::Left {
             let count = crate::view::text_match_count(&self.nav, &self.config, &self.states);
             if count > 0 {
-                self.nav.selected = self.nav.selected.checked_sub(1).unwrap_or(count - 1);
+                if self.nav.selected > 0 {
+                    self.nav.selected -= 1;
+                } else if self.config.settings.wrap_nav {
+                    self.nav.selected = count - 1;
+                    // scroll will be adjusted by paginate_spans
+                }
                 self.dirty.set(true);
             }
             return;
@@ -326,12 +336,29 @@ impl BarApp {
         }
 
         if path == "__scroll_left" {
-            self.nav.scroll = self.nav.scroll.saturating_sub(1);
+            if self.nav.scroll > 0 {
+                self.nav.scroll -= 1;
+            } else if self.config.settings.wrap_nav {
+                // Wrap to last item — paginate_spans will find the right page
+                let count = crate::view::text_match_count(&self.nav, &self.config, &self.states);
+                if count > 0 {
+                    self.nav.selected = count - 1;
+                    self.nav.scroll = count; // will be clamped by paginate_spans
+                }
+            }
             self.dirty.set(true);
             return;
         }
         if path == "__scroll_right" {
-            self.nav.scroll += 1;
+            let count = crate::view::text_match_count(&self.nav, &self.config, &self.states);
+            // Check if we're on the last page by seeing if scroll+1 would be clamped
+            let at_end = self.nav.scroll + 1 >= count;
+            if !at_end {
+                self.nav.scroll += 1;
+            } else if self.config.settings.wrap_nav {
+                self.nav.selected = 0;
+                self.nav.scroll = 0;
+            }
             self.dirty.set(true);
             return;
         }

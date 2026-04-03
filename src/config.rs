@@ -109,6 +109,8 @@ pub struct Settings {
     pub monitors: HashMap<String, MonitorCfg>,
     #[serde(default = "default_true")]
     pub defocus_on_niri_events: bool,
+    #[serde(default = "default_true")]
+    pub wrap_nav: bool,
 }
 
 fn default_true() -> bool { true }
@@ -336,6 +338,8 @@ struct RuntimeSettings {
     monitors: HashMap<String, MonitorCfg>,
     #[serde(default = "default_true")]
     defocus_on_niri_events: bool,
+    #[serde(default = "default_true")]
+    wrap_nav: bool,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -442,6 +446,7 @@ impl Config {
                     icon_weight: runtime.settings.icon_weight,
                     monitors: runtime.settings.monitors,
                     defocus_on_niri_events: runtime.settings.defocus_on_niri_events,
+                    wrap_nav: runtime.settings.wrap_nav,
                 },
                 bar: BarDef {
                     modules,

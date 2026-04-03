@@ -40,8 +40,13 @@
           filter = srcFilter;
         };
 
-        cyberdeck = craneLib.buildPackage {
+        # Build deps separately — cached across source changes
+        cargoArtifacts = craneLib.buildDepsOnly {
           inherit src nativeBuildInputs buildInputs;
+        };
+
+        cyberdeck = craneLib.buildPackage {
+          inherit src nativeBuildInputs buildInputs cargoArtifacts;
         };
       in
       {

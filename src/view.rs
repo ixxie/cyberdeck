@@ -90,6 +90,7 @@ pub(crate) fn paginate_spans(
     bg: Rgba,
     caret_fg: Rgba,
     pc: &PillCfg,
+    wrap: bool,
 ) -> Vec<Span> {
     if spans.is_empty() { return spans; }
 
@@ -138,10 +139,20 @@ pub(crate) fn paginate_spans(
         }
     };
 
-    *scroll = (*scroll).min(spans.len().saturating_sub(1));
+    // Clamp scroll to valid range
+    let max_scroll = spans.len().saturating_sub(1);
+    *scroll = (*scroll).min(max_scroll);
+
     let mut end = page_end(*scroll);
 
-    if selected >= end {
+    // If scroll is past the start of the last page, find the correct last page start
+    if end <= *scroll && *scroll > 0 {
+        *scroll = page_start_before(spans.len());
+        end = page_end(*scroll);
+    }
+
+    // Advance scroll until selected is visible
+    while selected >= end && end < spans.len() {
         *scroll = end;
         end = page_end(*scroll);
     }
@@ -151,8 +162,9 @@ pub(crate) fn paginate_spans(
         end = page_end(*scroll);
     }
 
-    let has_left = *scroll > 0;
-    let has_right = end < spans.len();
+    let multi_page = *scroll > 0 || end < spans.len();
+    let has_left = *scroll > 0 || (wrap && multi_page);
+    let has_right = end < spans.len() || (wrap && multi_page);
 
     let mut result = Vec::new();
     if has_left { result.push(left_caret); }
@@ -598,6 +610,7 @@ pub(crate) fn text_matched_items(
         sorted.sort_by(|a, b| a.1.name.cmp(&b.1.name));
 
         for (id, m) in sorted {
+            if m.widget.is_none() && m.module_type.is_none() { continue; }
             let display = m.name.to_lowercase();
             if q.is_empty() || display.contains(&q) {
                 items.push((display, TextItem::Module { id: id.clone() }));
