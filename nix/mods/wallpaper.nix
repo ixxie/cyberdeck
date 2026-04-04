@@ -1,14 +1,14 @@
 { pkgs, ... }:
 {
   enable = false;
-  deps = [ pkgs.swww ];
-  services.swww-daemon = {
-    description = "swww wallpaper daemon";
+  deps = [ pkgs.awww ];
+  services.awww-daemon = {
+    description = "awww wallpaper daemon";
     wantedBy = [ "graphical-session.target" ];
     partOf = [ "graphical-session.target" ];
     after = [ "graphical-session.target" ];
     serviceConfig = {
-      ExecStart = "${pkgs.swww}/bin/swww-daemon";
+      ExecStart = "${pkgs.awww}/bin/awww-daemon";
       ExecStartPost = "${pkgs.bash}/bin/bash -c 'sleep 1 && cyberdeck wallpaper init'";
       Restart = "on-failure";
       RestartSec = 2;

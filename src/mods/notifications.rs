@@ -235,28 +235,30 @@ impl InteractiveModule for NotificationsDeep {
 
     fn cursor(&self) -> Option<usize> { Some(self.cursor) }
 
-    fn breadcrumb(&self) -> Vec<String> {
-        vec![]
-    }
+
 
     fn key_hints(&self) -> Vec<KeyHintDef> {
         match &self.view {
             View::AppList => {
-                let entries = vec![
-                    KeyHintDef { key: "←→".into(), action: String::new(), label: "scroll".into(), icon: None },
-                    KeyHintDef { key: "Enter".into(), action: String::new(), label: "open".into(), icon: None },
-                    KeyHintDef { key: "m".into(), action: String::new(), label: "mute/unmute".into(), icon: None },
-                    KeyHintDef { key: "d".into(), action: String::new(), label: "dismiss app".into(), icon: None },
-                    KeyHintDef { key: "Esc".into(), action: "back".into(), label: "back".into(), icon: None },
-                ];
-                entries
+                let store = crate::notifications::STORE.lock().unwrap();
+                let groups = store.by_app();
+                let selected_muted = if self.cursor == 0 && !groups.is_empty() {
+                    false // "all" entry
+                } else {
+                    let idx = if groups.is_empty() { 0 } else { self.cursor.saturating_sub(1) };
+                    groups.get(idx).map(|g| g.muted).unwrap_or(false)
+                };
+                drop(store);
+                let mute_label = if selected_muted { "unmute" } else { "mute" };
+                vec![
+                    KeyHintDef { key: "m".into(), action: String::new(), label: mute_label.into(), icon: None },
+                    KeyHintDef { key: "d".into(), action: String::new(), label: "dismiss".into(), icon: None },
+                ]
             }
             View::Detail { .. } => {
                 vec![
-                    KeyHintDef { key: "←→".into(), action: String::new(), label: "scroll".into(), icon: None },
                     KeyHintDef { key: "d".into(), action: String::new(), label: "dismiss".into(), icon: None },
                     KeyHintDef { key: "c".into(), action: String::new(), label: "clear".into(), icon: None },
-                    KeyHintDef { key: "Esc".into(), action: String::new(), label: "back".into(), icon: None },
                 ]
             }
         }

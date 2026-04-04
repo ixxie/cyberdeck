@@ -40,15 +40,6 @@ impl Elem {
         self
     }
 
-    pub fn font_scale(mut self, s: f32) -> Self {
-        self.font_scale = s;
-        self
-    }
-
-    pub fn y_offset(mut self, y: f32) -> Self {
-        self.y_offset = y;
-        self
-    }
 }
 
 #[derive(Clone)]
@@ -162,9 +153,9 @@ impl Frame {
 // === Measurement ===
 
 pub struct Metrics {
-    pub cell_w: f32,
+    pub _cell_w: f32,
     pub cell_h: f32,
-    pub scale: f32,
+    pub _scale: f32,
     pub elem_widths: Vec<f32>,
     pub span_widths: Vec<f32>,
     pub elem_gap: f32,
@@ -208,7 +199,7 @@ impl Metrics {
             span_widths.push(sw);
         }
 
-        Self { cell_w, cell_h, scale, elem_widths, span_widths, elem_gap }
+        Self { _cell_w: cell_w, cell_h, _scale: scale, elem_widths, span_widths, elem_gap }
     }
 
     pub fn elem_w_at(&self, idx: usize) -> f32 {
@@ -219,12 +210,6 @@ impl Metrics {
         self.span_widths.get(idx).copied().unwrap_or(0.0)
     }
 
-    /// Sum of span widths for a range of the flat span index.
-    pub fn spans_w(&self, range: std::ops::Range<usize>, gap: f32) -> f32 {
-        let w: f32 = range.clone().filter_map(|i| self.span_widths.get(i).copied()).sum();
-        let n = range.len();
-        w + n.saturating_sub(1) as f32 * gap
-    }
 }
 
 // === Taffy-based layout ===
@@ -233,7 +218,7 @@ fn length(v: f32) -> LengthPercentage {
     LengthPercentage::Length(v)
 }
 
-pub fn lay(content: &BarContent, bar_w: f32, bar_h: f32, track_pad: f32, m: &Metrics) -> Frame {
+pub fn lay(content: &BarContent, bar_w: f32, bar_h: f32, track_pad: &crate::config::Edges, m: &Metrics) -> Frame {
     let mut tree = TaffyTree::<()>::new();
     let elem_gap = m.elem_gap;
     let gap = content.gap;
@@ -354,14 +339,8 @@ pub fn lay(content: &BarContent, bar_w: f32, bar_h: f32, track_pad: f32, m: &Met
             flex_direction: FlexDirection::Row,
             align_items: Some(AlignItems::Center),
             size: Size {
-                width: Dimension::Length(bar_w),
-                height: Dimension::Length(bar_h),
-            },
-            padding: taffy::prelude::Rect {
-                left: length(track_pad),
-                right: length(track_pad),
-                top: length(0.0),
-                bottom: length(0.0),
+                width: Dimension::Length(bar_w - track_pad.left - track_pad.right),
+                height: Dimension::Length(bar_h - track_pad.top - track_pad.bottom),
             },
             gap: Size {
                 width: length(gap),
@@ -384,8 +363,8 @@ pub fn lay(content: &BarContent, bar_w: f32, bar_h: f32, track_pad: f32, m: &Met
         let gl = tree.layout(group_nodes[info.group_idx]).unwrap();
 
         let span_rect = Rect {
-            x: gl.location.x + sl.location.x,
-            y: gl.location.y + sl.location.y,
+            x: track_pad.left + gl.location.x + sl.location.x,
+            y: track_pad.top + gl.location.y + sl.location.y,
             w: sl.size.width,
             h: sl.size.height,
         };

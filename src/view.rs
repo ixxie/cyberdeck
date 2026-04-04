@@ -11,7 +11,38 @@ use crate::config::{Config, ModuleDef};
 use crate::layout::{BarContent, Elem, Metrics, Span};
 use crate::mods::InteractiveModule;
 use crate::source::ModuleState;
+use crate::config::KeyHintDef;
 use crate::template::TemplateEngine;
+
+/// Format a key hint compactly:
+/// - Single letter matching label start: "[s]can"
+/// - Symbol key: "[↔]select"
+/// - Otherwise: "[key] label"
+fn format_hint(hint: &KeyHintDef) -> String {
+    let label = if hint.label.is_empty() { &hint.action } else { &hint.label };
+    let key = &hint.key;
+
+    // Single ASCII letter that matches the start of the label
+    if key.len() == 1 {
+        let ch = key.chars().next().unwrap();
+        if ch.is_ascii_alphabetic() {
+            let lower = ch.to_ascii_lowercase();
+            if label.starts_with(lower) || label.starts_with(ch.to_ascii_uppercase()) {
+                return format!("[{}]{}", key, &label[1..]);
+            }
+        }
+    }
+
+    // Symbol key (non-ASCII or special): no space
+    let is_symbol = key.chars().any(|c| !c.is_ascii_alphanumeric());
+    if is_symbol {
+        return format!("[{}]{}", key, label);
+    }
+
+    // Fallback: space separated
+    format!("[{}] {}", key, label)
+}
+
 
 #[derive(Debug, Clone)]
 pub(crate) enum TextItem {
@@ -19,8 +50,9 @@ pub(crate) enum TextItem {
     App { exec: String, desktop_id: Option<String> },
 }
 
-pub(crate) struct PillCfg {
-    pub padding: f32,
+pub(crate) struct PillStyle {
+    pub pad_x: f32,
+    pub pad_y: f32,
     pub radius: f32,
     pub max_chars: usize,
 }
@@ -64,15 +96,15 @@ fn truncate_elems(elems: &mut Vec<Elem>, max_chars: usize) {
     }
 }
 
-fn pill(mut elems: Vec<Elem>, bg: Rgba, pc: &PillCfg) -> Span {
+fn pill(mut elems: Vec<Elem>, bg: Rgba, pc: &PillStyle) -> Span {
     truncate_elems(&mut elems, pc.max_chars);
-    Span::new(elems).bg(bg).radius(pc.radius).pad(pc.padding, pc.padding)
+    Span::new(elems).bg(bg).radius(pc.radius).pad(pc.pad_x, pc.pad_y)
 }
 
-fn pill_bright(mut elems: Vec<Elem>, bg: Rgba, pc: &PillCfg) -> Span {
+fn pill_bright(mut elems: Vec<Elem>, bg: Rgba, pc: &PillStyle) -> Span {
     truncate_elems(&mut elems, pc.max_chars);
     let bright = Rgba::new(bg.r, bg.g, bg.b, (bg.a as f32 * 1.3).min(255.0) as u8);
-    Span::new(elems).bg(bright).radius(pc.radius).pad(pc.padding, pc.padding)
+    Span::new(elems).bg(bright).radius(pc.radius).pad(pc.pad_x, pc.pad_y)
 }
 
 /// Fixed pagination: fill a page from `scroll`, flip pages when cursor hits edge.
@@ -89,7 +121,7 @@ pub(crate) fn paginate_spans(
     gap: f32,
     bg: Rgba,
     caret_fg: Rgba,
-    pc: &PillCfg,
+    pc: &PillStyle,
     wrap: bool,
 ) -> Vec<Span> {
     if spans.is_empty() { return spans; }
@@ -108,7 +140,7 @@ pub(crate) fn paginate_spans(
     let right_caret = pill(vec![Elem::text(template_engine.render_icon("caret-right")).fg(caret_fg)], bg, pc)
         .path("__scroll_right");
     // Estimate caret width as 1 icon + padding (close enough for reserving space)
-    let caret_w = m.cell_h + 2.0 * pc.padding + gap;
+    let caret_w = m.cell_h + 2.0 * pc.pad_x + gap;
 
     let page_end = |start: usize| -> usize {
         let has_left = start > 0;
@@ -191,7 +223,7 @@ fn workspace_pill(
     states: &HashMap<String, ModuleState>,
     pal: Palette,
     bg: Rgba,
-    pc: &PillCfg,
+    pc: &PillStyle,
     rename_query: Option<&str>,
 ) -> Span {
     if let Some(query) = rename_query {
@@ -232,7 +264,7 @@ fn title_pill(
     pal: Palette,
     location_age: Duration,
     bg: Rgba,
-    pc: &PillCfg,
+    pc: &PillStyle,
 ) -> Option<Span> {
     let win_data = states.get("window").map(|s| &s.data);
     let title = win_data
@@ -267,7 +299,7 @@ pub(crate) fn root_content(
     location_age: Duration,
     gap: f32,
     bg: Rgba,
-    pc: &PillCfg,
+    pc: &PillStyle,
     ws_rename: Option<&str>,
 ) -> BarContent {
     let states_ref = states.borrow();
@@ -383,7 +415,7 @@ pub(crate) fn mod_content(
     interactive: &HashMap<String, Box<dyn InteractiveModule>>,
     gap: f32,
     bg: Rgba,
-    pc: &PillCfg,
+    pc: &PillStyle,
 ) -> Option<BarContent> {
     let id = mod_id?;
     let module = config.bar.modules.get(id)?;
@@ -408,13 +440,7 @@ pub(crate) fn mod_content(
             }
         }).collect();
 
-        let hint_strs: Vec<String> = deep.key_hints().iter().map(|hint| {
-            if hint.label.is_empty() {
-                format!("[{}] {}", hint.key, hint.action)
-            } else {
-                format!("[{}] {}", hint.key, hint.label)
-            }
-        }).collect();
+        let hint_strs: Vec<String> = deep.key_hints().iter().map(format_hint).collect();
         let hints = vec![Elem::text(hint_strs.join("  ")).fg(pal.idle)];
 
         let breadcrumb = render_breadcrumb_elems(module, template_engine, pal.active);
@@ -444,15 +470,9 @@ pub(crate) fn mod_content(
     let breadcrumb = render_breadcrumb_elems(module, template_engine, pal.active);
     drop(states_ref);
 
-    let hint_strs: Vec<String> = module.key_hints.iter().map(|hint| {
-        if hint.label.is_empty() {
-            format!("[{}] {}", hint.key, hint.action)
-        } else {
-            format!("[{}] {}", hint.key, hint.label)
-        }
-    }).collect();
+    let hint_strs: Vec<String> = module.key_hints.iter().map(format_hint).collect();
     let hints_text = if hint_strs.is_empty() {
-        "[Esc] back".to_string()
+        format_hint(&KeyHintDef { key: "Esc".into(), action: "back".into(), label: "back".into(), icon: None })
     } else {
         hint_strs.join("  ")
     };
@@ -488,7 +508,7 @@ pub(crate) fn text_content(
     pal: Palette,
     gap: f32,
     bg: Rgba,
-    pc: &PillCfg,
+    pc: &PillStyle,
 ) -> BarContent {
     let q = nav.query.to_lowercase();
 

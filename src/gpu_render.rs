@@ -1,26 +1,11 @@
 use vello::Scene;
-use vello::kurbo::{Affine, RoundedRect, Rect};
+use vello::kurbo::{Affine, RoundedRect};
 use vello::peniko::Fill;
 
 use crate::color::Rgba;
 use crate::layout::Frame;
 use crate::icons::IconSet;
 use crate::render::Renderer;
-
-/// Convert sRGB u8 component to linear f32.
-fn srgb_to_linear(c: u8) -> f32 {
-    let s = c as f32 / 255.0;
-    if s <= 0.04045 {
-        s / 12.92
-    } else {
-        ((s + 0.055) / 1.055).powf(2.4)
-    }
-}
-
-/// Convert sRGB u8 to linear u8 (for image pixel data).
-fn srgb_to_linear_u8(c: u8) -> u8 {
-    (srgb_to_linear(c) * 255.0 + 0.5) as u8
-}
 
 fn rgba_brush(c: Rgba, opacity: f32) -> vello::peniko::Brush {
     let a = c.a as f32 / 255.0 * opacity;
@@ -37,17 +22,32 @@ pub fn build_scene(
     renderer: &mut Renderer,
     icons: &IconSet,
     bg: Rgba,
+    track_radius: f32,
+    bar_w: u32,
+    bar_h: u32,
     scale: i32,
     output_mul: f32,
 ) -> vello::peniko::color::AlphaColor<vello::peniko::color::Srgb> {
     scene.reset();
     let sf = scale as f64;
+    let w = bar_w as f64 * sf;
+    let h = bar_h as f64 * sf;
 
-    // Return the background as base_color for RenderParams
-    // (avoids anti-aliasing fringe at pill edges from blending with transparent)
-    let base = vello::peniko::color::AlphaColor::new(
-        [bg.r as f32 / 255.0, bg.g as f32 / 255.0, bg.b as f32 / 255.0, bg.a as f32 / 255.0],
-    );
+    // When track has rounded corners, clear to transparent and draw a rounded rect.
+    // Otherwise use bg as base_color (avoids anti-aliasing fringe at pill edges).
+    let base = if track_radius > 0.0 {
+        // Rounded solid track: clear to transparent, draw rounded rect
+        let r = track_radius as f64 * output_mul as f64 * sf;
+        let rrect = RoundedRect::new(0.0, 0.0, w, h, r);
+        let brush = rgba_brush(bg, 1.0);
+        scene.fill(Fill::NonZero, Affine::IDENTITY, &brush, None, &rrect);
+        vello::peniko::color::AlphaColor::new([0.0, 0.0, 0.0, 0.0])
+    } else {
+        // Flat solid track: use as clear color
+        vello::peniko::color::AlphaColor::new(
+            [bg.r as f32 / 255.0, bg.g as f32 / 255.0, bg.b as f32 / 255.0, bg.a as f32 / 255.0],
+        )
+    };
 
     for fspan in &frame.spans {
         let sx = fspan.rect.x as f64 * sf;
@@ -65,8 +65,8 @@ pub fn build_scene(
             let bg_a = sbg.a as f32 * opacity / 255.0;
             if bg_a > 0.0 {
                 let radius = fspan.radius as f64 * sf;
-                let brush = rgba_brush(sbg, opacity);
                 let rrect = RoundedRect::new(sx, sy, sx + sw, sy + sh, radius);
+                let brush = rgba_brush(sbg, opacity);
                 scene.fill(Fill::NonZero, Affine::IDENTITY, &brush, None, &rrect);
             }
         }
@@ -255,3 +255,4 @@ fn pixmap_to_image(pm: &tiny_skia::Pixmap) -> vello::peniko::ImageBrush {
     };
     vello::peniko::ImageBrush::new(image_data)
 }
+

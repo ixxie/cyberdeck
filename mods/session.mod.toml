@@ -40,16 +40,6 @@ key = "l"
 label = "logout"
 icon = "sign-out"
 
-[[hooks]]
-condition = "{{ capacity < 20 and not charging }}"
-action = "notify-send -u normal 'Power' 'Battery at {{ capacity }}%'"
-timeout = 5
-
-[[hooks]]
-condition = "{{ capacity < 5 and not charging }}"
-action = "notify-send -u critical 'Power' 'Battery critical'"
-timeout = 5
-
 [[key-hints]]
 key = "Esc"
 action = "back"

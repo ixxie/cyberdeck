@@ -116,9 +116,9 @@ impl Renderer {
     }
 
     pub fn bar_height(&self, settings: &crate::config::Settings) -> u32 {
-        let track = settings.resolve_track();
-        let pill = settings.resolve_pill();
-        (self.cell_h + 2.0 * pill.padding + 2.0 * track.padding).ceil() as u32
+        let rbar = settings.resolve_bar();
+        let rpill = settings.resolve_pill();
+        (self.cell_h + rpill.padding.y() + rbar.padding.y()).ceil() as u32
     }
 
     /// Rasterize a text run into a standalone RGBA pixmap for GPU compositing.

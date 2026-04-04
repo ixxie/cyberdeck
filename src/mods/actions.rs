@@ -15,7 +15,7 @@ struct Action {
 }
 
 pub struct ActionPalette {
-    module_name: String,
+    _module_name: String,
     actions: Vec<Action>,
     cursor: usize,
 }
@@ -36,7 +36,7 @@ impl ActionPalette {
             })
             .collect();
         Self {
-            module_name: name.to_string(),
+            _module_name: name.to_string(),
             actions,
             cursor: 0,
         }
@@ -88,15 +88,10 @@ impl InteractiveModule for ActionPalette {
 
     fn cursor(&self) -> Option<usize> { Some(self.cursor) }
 
-    fn breadcrumb(&self) -> Vec<String> {
-        vec![self.module_name.clone()]
-    }
+
 
     fn key_hints(&self) -> Vec<KeyHintDef> {
         vec![
-            KeyHintDef { key: "←→".into(), action: String::new(), label: "select".into(), icon: None },
-            KeyHintDef { key: "⏎".into(), action: String::new(), label: "run".into(), icon: None },
-            KeyHintDef { key: "Esc".into(), action: "back".into(), label: "back".into(), icon: None },
         ]
     }
 

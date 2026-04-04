@@ -163,7 +163,7 @@ pub fn shuffle(params: &serde_json::Map<String, Value>, group: Option<&str>) {
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| picked.to_string_lossy().to_string());
 
-    let status = Command::new("swww")
+    let status = Command::new("awww")
         .args([
             "img",
             &picked.to_string_lossy(),
@@ -198,7 +198,7 @@ pub fn init(params: &serde_json::Map<String, Value>) {
         return;
     }
 
-    let _ = Command::new("swww")
+    let _ = Command::new("awww")
         .args([
             "img",
             &full_path.to_string_lossy(),

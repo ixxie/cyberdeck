@@ -7,6 +7,7 @@ include!(concat!(env!("OUT_DIR"), "/mod_meta.rs"));
 
 pub struct Cli {
     pub config: Option<String>,
+    pub json: bool,
     pub cmd: Option<Cmd>,
 }
 
@@ -15,7 +16,7 @@ pub enum Cmd {
     Launcher,
     Dismiss,
     State,
-    Style(String),
+    Theme(String),
     Module(Vec<String>),
 }
 
@@ -24,11 +25,13 @@ pub fn build_cli() -> Command {
         .version(env!("CARGO_PKG_VERSION"))
         .about("Wayland status bar")
         .arg(Arg::new("config").long("config").help("Config file path"))
+        .arg(Arg::new("json").long("json").action(clap::ArgAction::SetTrue)
+            .help("Output raw JSON response"))
         .subcommand(Command::new("init").about("Create default config.toml"))
         .subcommand(Command::new("launcher").about("Toggle the launcher"))
         .subcommand(Command::new("dismiss").about("Dismiss the current view"))
         .subcommand(Command::new("state").about("Print bar state as JSON"))
-        .subcommand(Command::new("style").about("Set bar style at runtime")
+        .subcommand(Command::new("theme").about("Set bar theme at runtime")
             .arg(Arg::new("name").required(true)
                 .help("classic, floating, pills, or transparent")))
         .subcommand(Command::new("workspace").about("Workspace commands (alias for workspaces)")
@@ -77,9 +80,9 @@ pub fn parse() -> Cli {
         Some(("launcher", _)) => Some(Cmd::Launcher),
         Some(("dismiss", _)) => Some(Cmd::Dismiss),
         Some(("state", _)) => Some(Cmd::State),
-        Some(("style", sub)) => {
+        Some(("theme", sub)) => {
             let name = sub.get_one::<String>("name").cloned().unwrap_or_default();
-            Some(Cmd::Style(name))
+            Some(Cmd::Theme(name))
         }
         Some((name, sub)) => {
             // Resolve singular aliases to module names
@@ -98,17 +101,18 @@ pub fn parse() -> Cli {
         None => None,
     };
 
-    Cli { config, cmd }
+    let json = matches.get_flag("json");
+    Cli { config, json, cmd }
 }
 
-pub fn run_cmd(cmd: Cmd) {
+pub fn run_cmd(cmd: Cmd, json: bool) {
     match cmd {
         Cmd::Init => run_init(),
-        Cmd::Launcher => ipc::send_request(&IpcRequest::Launcher),
-        Cmd::Dismiss => ipc::send_request(&IpcRequest::Dismiss),
-        Cmd::State => ipc::send_request(&IpcRequest::State),
-        Cmd::Style(name) => ipc::send_request(&IpcRequest::SetStyle { style: name }),
-        Cmd::Module(args) => run_module_cmd(&args),
+        Cmd::Launcher => ipc::send_request(&IpcRequest::Launcher, json),
+        Cmd::Dismiss => ipc::send_request(&IpcRequest::Dismiss, json),
+        Cmd::State => ipc::send_request(&IpcRequest::State, json),
+        Cmd::Theme(name) => ipc::send_request(&IpcRequest::SetTheme { theme: name }, json),
+        Cmd::Module(args) => run_module_cmd(&args, json),
     }
 }
 
@@ -135,27 +139,23 @@ const CONFIG_TEMPLATE: &str = r##"# Cyberdeck configuration
 # Uncomment and modify options as needed.
 
 [settings]
+# theme = "classic"         # classic, floating, pills, or transparent
 # position = "top"          # top or bottom
 # font = "monospace"
 # font-size = 14
-# layout = "pills"          # classic, floating, pills, or transparent
-# gap = 6                   # spacing between visual elements (px)
+# gap = 6                   # spacing (px) — default for all padding/margin
 # scale = 1.0               # global UI scale
+# material = "solid"        # "solid", "glass", or { type = "glass", opacity = 0.3, color = "#222222" }
+# color = "#222222"         # fallback color
+# radius = 6                # default corner radius
 # icon-weight = "light"     # regular, bold, thin, light, fill, or duotone
-
-# [settings.theme]
-# color = "#222222"
-# opacity = 0.8
+# [settings.bar]             # overrides (theme sets defaults)
+# padding = 6               # or [y, x] or [top, right, bottom, left]
+# margin = 6                # or [y, x] or [top, right, bottom, left]
+#
+# [settings.pill]            # overrides (theme sets defaults)
+# padding = 6               # or [y, x] or [top, right, bottom, left]
 # radius = 6
-# padding = 6
-#
-# [settings.theme.track]    # bar background overrides
-# color = "#222222"
-# opacity = 1.0
-#
-# [settings.theme.pill]     # pill overrides
-# opacity = 1.0
-# radius = 8
 
 # [settings.monitors.DP-1]
 # scale = 1.5
@@ -214,7 +214,7 @@ const CONFIG_TEMPLATE: &str = r##"# Cyberdeck configuration
 # dir = "~/Pictures/wallpapers"
 "##;
 
-fn run_module_cmd(args: &[String]) {
+fn run_module_cmd(args: &[String], json: bool) {
     if args.is_empty() {
         eprintln!("usage: cyberdeck <module> <action> [args...]");
         std::process::exit(1);
@@ -247,7 +247,7 @@ fn run_module_cmd(args: &[String]) {
     if action == "open" {
         ipc::send_request(&IpcRequest::Push {
             child: mod_name.clone(),
-        });
+        }, json);
         return;
     }
 
@@ -264,7 +264,7 @@ fn run_module_cmd(args: &[String]) {
                         module: mod_name.clone(),
                         action: action.to_string(),
                         args: extra.to_vec(),
-                    });
+                    }, json);
                 }
                 crate::actions::ActionResult::Unknown => {
                     eprintln!("unknown native action '{action}' for module '{mod_name}'");

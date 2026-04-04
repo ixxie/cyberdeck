@@ -95,8 +95,11 @@ impl BarInstance {
             Position::Bottom => Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
         };
         layer_surface.set_anchor(anchor);
-        let m = config.settings.margin() as i32;
-        layer_surface.set_margin(m, m, m, m);
+        let margin = config.settings.resolve_bar().margin;
+        layer_surface.set_margin(
+            margin.top as i32, margin.right as i32,
+            margin.bottom as i32, margin.left as i32,
+        );
 
         layer_surface.set_size(0, bar_h);
         let exclusive = bar_h as i32;
@@ -173,7 +176,7 @@ pub struct BarApp {
 pub struct Toast {
     pub toast_id: u64,
     pub text: String,
-    pub icon: Option<String>,
+    pub _icon: Option<String>,
     pub icon_pixmap: Option<std::sync::Arc<tiny_skia::Pixmap>>,
     pub elems: Vec<crate::layout::Elem>,
     pub token: RegistrationToken,
@@ -347,9 +350,22 @@ impl BarApp {
         }
     }
 
-    pub fn set_layout(&mut self, layout: crate::config::Layout) {
-        self.config.settings.layout = layout;
+    pub fn set_theme(&mut self, name: &str) -> Result<(), String> {
+        use crate::config::Theme;
+        let theme = match name {
+            "classic" => Theme::Classic,
+            "floating" => Theme::Floating,
+            "pills" => Theme::Pills,
+            "transparent" => Theme::Transparent,
+            _ => return Err(format!("unknown theme: {name}. use: classic, floating, pills, transparent")),
+        };
+        self.config.settings.theme = theme;
+        // Clear overrides so theme defaults take effect
+        self.config.settings.bar.enabled = None;
+        self.config.settings.bar.floating = None;
+        self.config.settings.pill.enabled = None;
         self.apply_style();
+        Ok(())
     }
 
     fn apply_style(&mut self) {
@@ -360,15 +376,22 @@ impl BarApp {
         );
         let bar_h = self.renderer.bar_height(&self.config.settings);
         let exclusive = bar_h as i32;
-        let m = self.config.settings.margin() as i32;
+        let margin = self.config.settings.resolve_bar().margin;
         for bar in self.bars.values() {
             bar.layer_surface.set_size(0, bar_h);
             bar.layer_surface.set_exclusive_zone(exclusive);
-            bar.layer_surface.set_margin(m, m, m, m);
+            bar.layer_surface.set_margin(
+                margin.top as i32, margin.right as i32,
+                margin.bottom as i32, margin.left as i32,
+            );
             bar.layer_surface.wl_surface().commit();
         }
         self.dirty.set(true);
-        log::info!("style: layout={:?}", self.config.settings.layout);
+        log::info!("style: theme={:?}, bar.enabled={}, bar.floating={}, pill.enabled={}",
+            self.config.settings.theme,
+            self.config.settings.bar_enabled(),
+            self.config.settings.bar_floating(),
+            self.config.settings.pill_enabled());
     }
 
     pub fn maybe_redraw(&mut self) {
@@ -450,8 +473,9 @@ impl BarApp {
                     for (i, hook) in child.hooks.iter().enumerate() {
                         let is_true = self.template_engine.eval_hook_condition(child_id, i, &ms.data);
                         if is_true {
-                            log::debug!("hook fired: {child_id} action={}", hook.action);
-                            actions.push((child_id.clone(), hook.action.clone(), hook.timeout));
+                            let rendered = self.template_engine.render_hook_action(child_id, i, &ms.data);
+                            log::debug!("hook fired: {child_id} action={rendered}");
+                            actions.push((child_id.clone(), rendered, hook.timeout));
                         }
                     }
                 } else {
@@ -582,7 +606,7 @@ impl BarApp {
         self.toasts.push(Toast {
             toast_id: tid,
             text: String::new(),
-            icon: None,
+            _icon: None,
             icon_pixmap: None,
             elems,
             token,
@@ -624,7 +648,7 @@ impl BarApp {
         self.toasts.push(Toast {
             toast_id: tid,
             text: text.to_string(),
-            icon,
+            _icon: icon,
             icon_pixmap,
             elems: Vec::new(),
             token,
@@ -701,7 +725,7 @@ impl BarApp {
         }
     }
 
-    fn set_spotlight(&mut self, mod_id: &str, timeout: u64) {
+    fn set_spotlight(&mut self, mod_id: &str, _timeout: u64) {
         let module = match self.config.bar.modules.get(mod_id) {
             Some(m) => m,
             None => return,
@@ -803,8 +827,8 @@ impl BarApp {
             return;
         }
 
-        let track = config.settings.resolve_track();
-        let pill = config.settings.resolve_pill();
+        let rbar = config.settings.resolve_bar();
+        let rpill = config.settings.resolve_pill();
         let pal = Palette {
             selected: Rgba::new(255, 255, 255, 204), // 80%
             active: Rgba::new(255, 255, 255, 140),   // 55%
@@ -813,22 +837,23 @@ impl BarApp {
 
         let output_mul = config.settings.monitor_scale(bar.output_name.as_deref());
         let bar_w = bar.width as f32;
-        let track_pad = track.padding * output_mul;
+        let track_pad = rbar.padding.scale(output_mul);
         let output_name = bar.output_name.as_deref();
         let gap = config.settings.gap * output_mul;
 
-        let track_bg = track.color.with_opacity(track.opacity * config.settings.theme.opacity);
-        let pill_bg = pill.color.with_opacity(pill.opacity * config.settings.theme.opacity);
-        let surface_bg = if track.opacity > 0.0 { track_bg } else { Rgba::new(0, 0, 0, 0) };
+        let bar_bg = rbar.color.with_opacity(rbar.opacity);
+        let pill_bg = rpill.color.with_opacity(rpill.opacity);
+        let surface_bg = if rbar.opacity > 0.0 { bar_bg } else { Rgba::new(0, 0, 0, 0) };
 
-        let pc = crate::view::PillCfg {
-            padding: pill.padding * output_mul,
-            radius: pill.radius * output_mul,
-            max_chars: pill.max_chars,
+        let pc = crate::view::PillStyle {
+            pad_x: rpill.padding.left * output_mul,
+            pad_y: rpill.padding.top * output_mul,
+            radius: rpill.radius * output_mul,
+            max_chars: rpill.max_chars,
         };
 
-        let bar_h = ((renderer.cell_h + 2.0 * pill.padding + 2.0 * track.padding) * output_mul).ceil() as u32;
-        let bar_content_w = bar_w - 2.0 * track_pad;
+        let bar_h = ((renderer.cell_h + rpill.padding.y() + rbar.padding.y()) * output_mul).ceil() as u32;
+        let bar_content_w = bar_w - track_pad.left - track_pad.right;
         let cell_w = renderer.cell_w * output_mul;
         let cell_h = renderer.cell_h * output_mul;
         let scale = bar.scale as f32 * output_mul;
@@ -876,7 +901,7 @@ impl BarApp {
 
         // Re-measure after pagination (center spans changed)
         let metrics = Metrics::measure(&content, cell_w, cell_h, scale, output_mul, renderer, &bar.icons);
-        let mut frame = lay(&content, bar_w, bar_h as f32, track_pad, &metrics);
+        let mut frame = lay(&content, bar_w, bar_h as f32, &track_pad, &metrics);
 
         // Nav transition: ease-in over 300ms
         let nav_fade = ease_out((nav_age.as_secs_f32() / 0.3).min(1.0));
@@ -894,7 +919,8 @@ impl BarApp {
         let mut scene = vello::Scene::new();
         let base_color = crate::gpu_render::build_scene(
             &mut scene, &frame, renderer, &bar.icons,
-            surface_bg, bar.scale, output_mul,
+            surface_bg, rbar.radius, bar.width, bar_h,
+            bar.scale, output_mul,
         );
 
         bar.frame = Some(frame);
@@ -1140,9 +1166,11 @@ impl PointerHandler for BarApp {
         for event in events {
             match event.kind {
                 PointerEventKind::Press { button, .. } => {
-                    if button == 0x110 {
+                    if button == 0x110 { // left click
                         let ctrl = self.modifiers.ctrl;
                         self.handle_click(&event.surface, event.position.0, event.position.1, ctrl);
+                    } else if button == 0x111 { // right click
+                        self.handle_click(&event.surface, event.position.0, event.position.1, true);
                     }
                 }
                 PointerEventKind::Motion { .. } => {

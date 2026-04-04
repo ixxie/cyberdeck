@@ -49,28 +49,29 @@ fn main() {
 
     entries.sort_by(|a, b| a.0.cmp(&b.0));
 
-    // Generate MOD_META for CLI
-    let mut code = String::from("pub const MOD_META: &[(&str, &str, &[&str])] = &[\n");
+    // Generate MOD_META for CLI (included by cli.rs)
+    let mut meta = String::from("pub const MOD_META: &[(&str, &str, &[&str])] = &[\n");
     for (id, name, cmds) in &entries {
         let cmds_str: Vec<String> = cmds.iter().map(|c| format!("\"{}\"", c)).collect();
-        code.push_str(&format!(
+        meta.push_str(&format!(
             "    (\"{id}\", \"{name}\", &[{}]),\n",
             cmds_str.join(", ")
         ));
     }
-    code.push_str("];\n");
+    meta.push_str("];\n");
+    fs::write(&dest, meta).unwrap();
 
-    // Generate BUILTIN_MODS for modlib (use absolute paths for include_str!)
+    // Generate BUILTIN_MODS for modlib (included by modlib.rs)
     let mods_abs = fs::canonicalize(mods_dir).expect("cannot canonicalize mods/");
-    code.push_str("\npub const BUILTIN_MODS: &[(&str, &str)] = &[\n");
+    let mut builtins = String::from("pub const BUILTIN_MODS: &[(&str, &str)] = &[\n");
     for (id, _, _) in &entries {
         let abs = mods_abs.join(format!("{id}.mod.toml"));
-        code.push_str(&format!(
+        builtins.push_str(&format!(
             "    (\"{id}\", include_str!(\"{}\")),\n",
             abs.display()
         ));
     }
-    code.push_str("];\n");
-
-    fs::write(&dest, code).unwrap();
+    builtins.push_str("];\n");
+    let builtins_dest = Path::new(&out_dir).join("mod_builtins.rs");
+    fs::write(&builtins_dest, builtins).unwrap();
 }

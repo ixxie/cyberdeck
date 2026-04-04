@@ -157,7 +157,6 @@ pub trait InteractiveModule {
     /// Each inner Vec<Elem> becomes a separate pill in the center zone.
     fn render_center(&self, fg: Rgba, data: &serde_json::Value) -> Vec<Vec<Elem>>;
     fn cursor(&self) -> Option<usize> { None }
-    fn breadcrumb(&self) -> Vec<String>;
     fn key_hints(&self) -> Vec<KeyHintDef>;
     fn handle_key(&mut self, event: &KeyEvent, data: &serde_json::Value) -> KeyResult;
     fn reset(&mut self);

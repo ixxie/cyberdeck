@@ -27,8 +27,8 @@ pub enum IpcRequest {
     Type { text: String },
     #[serde(rename = "key")]
     Key { key: String },
-    #[serde(rename = "style")]
-    SetStyle { style: String },
+    #[serde(rename = "theme")]
+    SetTheme { theme: String },
     #[serde(rename = "action")]
     Action { module: String, action: String, #[serde(default)] args: Vec<String> },
     #[serde(rename = "event")]
@@ -241,14 +241,10 @@ fn dispatch(req: IpcRequest, app: &mut BarApp) -> IpcResponse {
             app.dirty.set(true);
             state_response(app)
         }
-        IpcRequest::SetStyle { style } => {
-            match style.as_str() {
-                "classic" => app.set_layout(crate::config::Layout::Classic),
-                "floating" => app.set_layout(crate::config::Layout::Floating),
-                "pills" => app.set_layout(crate::config::Layout::Pills),
-                "transparent" => app.set_layout(crate::config::Layout::Transparent),
-                _ => return IpcResponse::err(&format!("unknown style: {style}. use: classic, floating, pills, transparent")),
-            };
+        IpcRequest::SetTheme { theme } => {
+            if let Err(e) = app.set_theme(&theme) {
+                return IpcResponse::err(&e);
+            }
             state_response(app)
         }
     }
@@ -318,16 +314,16 @@ pub fn notify_bar(module: &str, toast: &str) {
     let _ = stream.write_all(json.as_bytes());
 }
 
-pub fn send_request(req: &IpcRequest) {
+pub fn send_request(req: &IpcRequest, raw_json: bool) {
     let path = sock_path();
     let mut stream = UnixStream::connect(&path).unwrap_or_else(|e| {
         eprintln!("failed to connect to cyberdeck: {e}");
         std::process::exit(1);
     });
 
-    let mut json = serde_json::to_string(req).unwrap();
-    json.push('\n');
-    stream.write_all(json.as_bytes()).unwrap_or_else(|e| {
+    let mut payload = serde_json::to_string(req).unwrap();
+    payload.push('\n');
+    stream.write_all(payload.as_bytes()).unwrap_or_else(|e| {
         eprintln!("failed to send command: {e}");
         std::process::exit(1);
     });
@@ -340,10 +336,20 @@ pub fn send_request(req: &IpcRequest) {
         std::process::exit(1);
     });
 
-    print!("{response}");
-
     let resp: serde_json::Value = serde_json::from_str(response.trim()).unwrap_or_default();
-    if resp.get("ok").and_then(|v| v.as_bool()) != Some(true) {
+    let ok = resp.get("ok").and_then(|v| v.as_bool()) == Some(true);
+
+    if raw_json {
+        print!("{response}");
+    } else if !ok {
+        if let Some(err) = resp.get("error").and_then(|v| v.as_str()) {
+            eprintln!("error: {err}");
+        } else {
+            eprintln!("command failed");
+        }
+    }
+
+    if !ok {
         std::process::exit(1);
     }
 }

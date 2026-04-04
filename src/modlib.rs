@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use crate::config::ModuleDef;
 
-include!(concat!(env!("OUT_DIR"), "/mod_meta.rs"));
+include!(concat!(env!("OUT_DIR"), "/mod_builtins.rs"));
 
 pub fn builtin_modules() -> HashMap<String, ModuleDef> {
     BUILTIN_MODS.iter()

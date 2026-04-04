@@ -68,13 +68,7 @@ impl InteractiveModule for CalendarDeep {
         }
     }
 
-    fn breadcrumb(&self) -> Vec<String> {
-        match self.level {
-            CalendarLevel::Week => vec!["Calendar".into()],
-            CalendarLevel::Month => vec!["Calendar".into(), format!("{}", self.year)],
-            CalendarLevel::Year => vec!["Calendar".into(), "Years".into()],
-        }
-    }
+
 
     fn key_hints(&self) -> Vec<KeyHintDef> {
         match self.level {
@@ -82,20 +76,17 @@ impl InteractiveModule for CalendarDeep {
                 KeyHintDef { key: "←→".into(), action: String::new(), label: "day".into(), icon: None },
                 KeyHintDef { key: "↑".into(), action: String::new(), label: "months".into(), icon: None },
                 KeyHintDef { key: "t".into(), action: String::new(), label: "today".into(), icon: None },
-                KeyHintDef { key: "Esc".into(), action: "back".into(), label: "back".into(), icon: None },
             ],
             CalendarLevel::Month => vec![
                 KeyHintDef { key: "←→".into(), action: String::new(), label: "month".into(), icon: None },
                 KeyHintDef { key: "↑".into(), action: String::new(), label: "years".into(), icon: None },
-                KeyHintDef { key: "↓⏎".into(), action: String::new(), label: "weeks".into(), icon: None },
+                KeyHintDef { key: "↓".into(), action: String::new(), label: "weeks".into(), icon: None },
                 KeyHintDef { key: "t".into(), action: String::new(), label: "today".into(), icon: None },
-                KeyHintDef { key: "Esc".into(), action: "back".into(), label: "back".into(), icon: None },
             ],
             CalendarLevel::Year => vec![
                 KeyHintDef { key: "←→".into(), action: String::new(), label: "year".into(), icon: None },
-                KeyHintDef { key: "↓⏎".into(), action: String::new(), label: "months".into(), icon: None },
+                KeyHintDef { key: "↓".into(), action: String::new(), label: "months".into(), icon: None },
                 KeyHintDef { key: "t".into(), action: String::new(), label: "today".into(), icon: None },
-                KeyHintDef { key: "Esc".into(), action: "back".into(), label: "back".into(), icon: None },
             ],
         }
     }

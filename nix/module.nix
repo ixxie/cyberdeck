@@ -18,9 +18,14 @@ let
     lib.mapAttrsToList (_name: mod: mod.deps or []) enabledModules
   );
 
-  # Collect services from enabled modules
+  # Collect user services from enabled modules
   moduleServices = lib.foldlAttrs (acc: _name: mod:
     acc // (mod.services or {})
+  ) {} enabledModules;
+
+  # Collect system services from enabled modules
+  moduleSystemServices = lib.foldlAttrs (acc: _name: mod:
+    acc // (mod.systemServices or {})
   ) {} enabledModules;
 
   # Collect environment variables from enabled modules
@@ -32,7 +37,7 @@ let
   # Always include enabled modules (even with empty overrides) so the
   # Rust side knows which modules to show
   moduleOverrides = lib.mapAttrs (_name: mod:
-    removeAttrs mod [ "enable" "deps" "services" "env" ]
+    removeAttrs mod [ "enable" "deps" "services" "systemServices" "env" ]
   ) enabledModules;
 
   finalConfig = {
@@ -89,6 +94,8 @@ in
   config = lib.mkIf cfg.enable {
     fonts.packages = [ pkgs.noto-fonts-monochrome-emoji ];
     environment.systemPackages = [ cyberdeckPkg ];
+
+    systemd.services = moduleSystemServices;
 
     systemd.user.services = (lib.mapAttrs (_name: svc:
       svc // { path = (svc.path or []) ++ [ cyberdeckPkg ]; }

@@ -132,16 +132,13 @@ impl InteractiveModule for OutputsDeep {
         ]]
     }
 
-    fn breadcrumb(&self) -> Vec<String> {
-        vec![]
-    }
+
 
     fn key_hints(&self) -> Vec<KeyHintDef> {
         vec![
             KeyHintDef { key: "↑↓".into(), action: String::new(), label: "vol".into(), icon: None },
             KeyHintDef { key: "m".into(), action: String::new(), label: "mute".into(), icon: None },
             KeyHintDef { key: "Tab".into(), action: String::new(), label: "device".into(), icon: None },
-            KeyHintDef { key: "Esc".into(), action: "back".into(), label: "back".into(), icon: None },
         ]
     }
 

@@ -37,7 +37,7 @@ fn main() {
     let cli = cli::parse();
 
     if let Some(cmd) = cli.cmd {
-        cli::run_cmd(cmd);
+        cli::run_cmd(cmd, cli.json);
         return;
     }
 

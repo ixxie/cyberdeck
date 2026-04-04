@@ -1,12 +1,11 @@
 use std::sync::Arc;
 
 use wgpu::*;
-use wgpu::util::DeviceExt;
 
 /// Shared GPU state: device, queue, and vello renderer.
 pub struct GpuState {
-    pub instance: Instance,
-    pub adapter: Adapter,
+    pub _instance: Instance,
+    pub _adapter: Adapter,
     pub device: Arc<Device>,
     pub queue: Arc<Queue>,
     pub vello: vello::Renderer,
@@ -54,7 +53,7 @@ impl GpuState {
         )
         .expect("failed to create vello renderer");
 
-        Self { instance, adapter, device, queue, vello }
+        Self { _instance: instance, _adapter: adapter, device, queue, vello }
     }
 }
 
@@ -194,7 +193,3 @@ impl GpuTarget {
     }
 }
 
-fn linear_to_srgb(c: f32) -> f32 {
-    if c <= 0.0031308 { return c * 12.92; }
-    1.055 * c.powf(1.0 / 2.4) - 0.055
-}

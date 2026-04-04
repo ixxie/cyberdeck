@@ -125,16 +125,11 @@ impl InteractiveModule for BluetoothDeep {
 
     fn cursor(&self) -> Option<usize> { Some(self.cursor) }
 
-    fn breadcrumb(&self) -> Vec<String> {
-        vec!["Bluetooth".into()]
-    }
+
 
     fn key_hints(&self) -> Vec<KeyHintDef> {
         vec![
-            KeyHintDef { key: "←→".into(), action: String::new(), label: "select".into(), icon: None },
-            KeyHintDef { key: "⏎".into(), action: String::new(), label: "toggle".into(), icon: None },
             KeyHintDef { key: "s".into(), action: String::new(), label: "scan".into(), icon: None },
-            KeyHintDef { key: "Esc".into(), action: "back".into(), label: "back".into(), icon: None },
         ]
     }
 

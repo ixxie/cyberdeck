@@ -1,5 +1,4 @@
 use serde_json::{json, Value};
-use std::io::BufRead;
 use std::process::Command;
 
 use smithay_client_toolkit::reexports::calloop::channel::Sender;
@@ -129,16 +128,13 @@ impl InteractiveModule for MediaDeep {
         vec![vec![Elem::text(label).fg(fg)]]
     }
 
-    fn breadcrumb(&self) -> Vec<String> {
-        vec![]
-    }
+
 
     fn key_hints(&self) -> Vec<KeyHintDef> {
         vec![
-            KeyHintDef { key: "p".into(), action: String::new(), label: "play/pause".into(), icon: None },
+            KeyHintDef { key: "p".into(), action: String::new(), label: "pause".into(), icon: None },
             KeyHintDef { key: "[".into(), action: String::new(), label: "prev".into(), icon: None },
             KeyHintDef { key: "]".into(), action: String::new(), label: "next".into(), icon: None },
-            KeyHintDef { key: "Esc".into(), action: "back".into(), label: "back".into(), icon: None },
         ]
     }
 

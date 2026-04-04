@@ -70,15 +70,10 @@ impl InteractiveModule for WallpaperDeep {
 
     fn cursor(&self) -> Option<usize> { Some(self.cursor) }
 
-    fn breadcrumb(&self) -> Vec<String> {
-        vec!["Wallpaper".into()]
-    }
+
 
     fn key_hints(&self) -> Vec<KeyHintDef> {
         vec![
-            KeyHintDef { key: "←→".into(), action: String::new(), label: "select".into(), icon: None },
-            KeyHintDef { key: "⏎".into(), action: String::new(), label: "shuffle".into(), icon: None },
-            KeyHintDef { key: "Esc".into(), action: "back".into(), label: "back".into(), icon: None },
         ]
     }
 

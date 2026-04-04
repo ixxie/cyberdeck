@@ -16,6 +16,7 @@ pub struct Notification {
     pub app_name: String,
     pub summary: String,
     pub body: String,
+    #[allow(dead_code)]
     pub icon: String,
     pub icon_pixmap: Option<Arc<Pixmap>>,
     pub timeout_ms: i32,
@@ -78,12 +79,6 @@ impl NotificationStore {
 
     pub fn dismiss_app(&mut self, app_name: &str) {
         self.notifications.retain(|n| n.app_name != app_name);
-    }
-
-    pub fn mark_read(&mut self, id: u32) {
-        if let Some(n) = self.notifications.iter_mut().find(|n| n.id == id) {
-            n.read = true;
-        }
     }
 
     pub fn mute(&mut self, app_name: &str) {
@@ -247,7 +242,7 @@ pub fn spawn_daemon() -> Channel<NotifyEvent> {
         .name("notif-dbus".into())
         .spawn(move || {
             async_io::block_on(async {
-                let conn = match zbus::connection::Builder::session()
+                let _conn = match zbus::connection::Builder::session()
                     .expect("failed to create D-Bus session builder")
                     .name("org.freedesktop.Notifications")
                     .expect("failed to request D-Bus name")

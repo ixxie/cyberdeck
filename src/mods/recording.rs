@@ -140,15 +140,10 @@ impl InteractiveModule for RecordingDeep {
 
     fn cursor(&self) -> Option<usize> { Some(self.cursor) }
 
-    fn breadcrumb(&self) -> Vec<String> {
-        vec!["Recording".into()]
-    }
+
 
     fn key_hints(&self) -> Vec<KeyHintDef> {
         vec![
-            KeyHintDef { key: "←→".into(), action: String::new(), label: "select".into(), icon: None },
-            KeyHintDef { key: "⏎".into(), action: String::new(), label: "toggle/run".into(), icon: None },
-            KeyHintDef { key: "Esc".into(), action: "back".into(), label: "back".into(), icon: None },
         ]
     }
 

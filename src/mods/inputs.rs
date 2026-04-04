@@ -269,21 +269,16 @@ impl InteractiveModule for InputsDeep {
 
     fn cursor(&self) -> Option<usize> { Some(self.cursor) }
 
-    fn breadcrumb(&self) -> Vec<String> {
-        vec![]
-    }
+
 
     fn key_hints(&self) -> Vec<KeyHintDef> {
         let mut hints = vec![
-            KeyHintDef { key: "←→".into(), action: String::new(), label: "select".into(), icon: None },
-            KeyHintDef { key: "⏎".into(), action: String::new(), label: "default".into(), icon: None },
             KeyHintDef { key: "↑↓".into(), action: String::new(), label: "vol".into(), icon: None },
             KeyHintDef { key: "m".into(), action: String::new(), label: "mute".into(), icon: None },
         ];
         if find_rnnoise_library().is_some() {
             hints.push(KeyHintDef { key: "n".into(), action: String::new(), label: "denoise".into(), icon: None });
         }
-        hints.push(KeyHintDef { key: "Esc".into(), action: "back".into(), label: "back".into(), icon: None });
         hints
     }
 

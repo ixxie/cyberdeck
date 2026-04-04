@@ -53,11 +53,14 @@ impl TemplateEngine {
                     .unwrap_or_else(|e| log::error!("bad label template {name}: {e}"));
             }
 
-            // Hook conditions
+            // Hook conditions and actions
             for (i, hook) in module.hooks.iter().enumerate() {
                 let name = format!("{id}.__hook.{i}.__cond");
                 tera.add_raw_template(&name, &hook.condition)
                     .unwrap_or_else(|e| log::error!("bad hook condition {name}: {e}"));
+                let name = format!("{id}.__hook.{i}.__action");
+                tera.add_raw_template(&name, &hook.action)
+                    .unwrap_or_else(|e| log::error!("bad hook action {name}: {e}"));
             }
         }
 
@@ -284,6 +287,17 @@ impl TemplateEngine {
         let rendered = self.tera.render(&name, &ctx).unwrap_or_default();
         let trimmed = rendered.trim();
         !trimmed.is_empty() && trimmed != "false" && trimmed != "0"
+    }
+
+    pub fn render_hook_action(
+        &self,
+        path: &str,
+        hook_idx: usize,
+        data: &serde_json::Value,
+    ) -> String {
+        let name = format!("{path}.__hook.{hook_idx}.__action");
+        let ctx = Context::from_value(data.clone()).unwrap_or_default();
+        self.tera.render(&name, &ctx).unwrap_or_default()
     }
 
     pub fn render_widget(
