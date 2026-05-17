@@ -25,15 +25,45 @@ pub fn exec_native(
         }
         ("recording", "toggle-audio" | "toggle-mic") => ActionResult::BarOnly,
 
-        ("inputs", "denoise") => {
-            let pid_path = crate::mods::inputs::denoise_pid_path();
+        ("bluetooth", act @ ("on" | "off" | "connect" | "disconnect" | "scan")) => {
+            match crate::mods::bluetooth::cli_action(act, args) {
+                Ok(toast) => ActionResult::Ok { toast },
+                Err(msg) => {
+                    log::warn!("bluetooth {act}: {msg}");
+                    ActionResult::Ok { toast: msg }
+                }
+            }
+        }
+
+        ("session", act @ ("suspend" | "shutdown" | "reboot")) => {
+            match crate::mods::session::cli_action(act, args) {
+                Ok(toast) => ActionResult::Ok { toast },
+                Err(msg) => {
+                    log::warn!("session {act}: {msg}");
+                    ActionResult::Ok { toast: msg }
+                }
+            }
+        }
+
+        ("profiles", act @ ("power-saver" | "saver" | "balanced" | "performance")) => {
+            match crate::mods::profiles::cli_action(act, args) {
+                Ok(toast) => ActionResult::Ok { toast },
+                Err(msg) => {
+                    log::warn!("profiles {act}: {msg}");
+                    ActionResult::Ok { toast: msg }
+                }
+            }
+        }
+
+        ("audio", "denoise") => {
+            let pid_path = crate::mods::audio::denoise_pid_path();
             let active = pid_path.exists()
                 && std::fs::read_to_string(&pid_path)
                     .ok()
                     .and_then(|s| s.trim().parse::<i32>().ok())
                     .map(|pid| unsafe { libc::kill(pid, 0) } == 0)
                     .unwrap_or(false);
-            crate::mods::inputs::toggle_denoise(active);
+            crate::mods::audio::toggle_denoise(active);
             crate::pipewire::invalidate();
             let state = if active { "disabled" } else { "enabled" };
             ActionResult::Ok { toast: format!("denoise {state}") }

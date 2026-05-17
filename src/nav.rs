@@ -150,7 +150,17 @@ impl BarApp {
             if let Some(ref key_name) = key_name {
                 // Try [[actions]] first
                 if let Some(act) = module.action_by_key(key_name) {
-                    if act.run != "native" {
+                    if act.run == "native" {
+                        if let Some(mod_id) = self.nav.stack.first().cloned() {
+                            let params: serde_json::Map<String, serde_json::Value> =
+                                module.params.iter()
+                                    .map(|(k, v)| (k.clone(), v.clone()))
+                                    .collect();
+                            let _ = crate::actions::exec_native(
+                                &mod_id, &act.name, &[], &params,
+                            );
+                        }
+                    } else {
                         Self::spawn_command(&act.run);
                     }
                     if let Some(mod_id) = self.nav.stack.first().cloned() {

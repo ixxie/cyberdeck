@@ -1,7 +1,7 @@
 { pkgs, ... }:
 {
   enable = false;
-  deps = [ pkgs.awww ];
+  deps = [ pkgs.awww pkgs.xdg-user-dirs ];
   services.awww-daemon = {
     description = "awww wallpaper daemon";
     wantedBy = [ "graphical-session.target" ];

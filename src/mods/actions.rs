@@ -15,13 +15,13 @@ struct Action {
 }
 
 pub struct ActionPalette {
-    _module_name: String,
+    module_id: String,
     actions: Vec<Action>,
     cursor: usize,
 }
 
 impl ActionPalette {
-    pub fn new(name: &str, action_defs: &[ActionDef], icon_resolver: &dyn Fn(&str) -> String) -> Self {
+    pub fn new(id: &str, action_defs: &[ActionDef], icon_resolver: &dyn Fn(&str) -> String) -> Self {
         let actions: Vec<Action> = action_defs.iter()
             .map(|a| {
                 let icon_char = a.icon.as_deref().map(icon_resolver);
@@ -36,9 +36,22 @@ impl ActionPalette {
             })
             .collect();
         Self {
-            _module_name: name.to_string(),
+            module_id: id.to_string(),
             actions,
             cursor: 0,
+        }
+    }
+
+    fn run_action(&self, action: &Action) {
+        if action.run == "native" {
+            let _ = crate::actions::exec_native(
+                &self.module_id,
+                &action.name,
+                &[],
+                &serde_json::Map::new(),
+            );
+        } else {
+            BarApp::spawn_command(&action.run);
         }
     }
 }
@@ -110,18 +123,14 @@ impl InteractiveModule for ActionPalette {
             }
             Keysym::Return => {
                 if let Some(action) = self.actions.get(self.cursor) {
-                    if action.run != "native" {
-                        BarApp::spawn_command(&action.run);
-                    }
+                    self.run_action(action);
                 }
                 KeyResult::Action
             }
             _ => {
                 if let Some(ch) = event.utf8.as_deref() {
                     if let Some(action) = self.actions.iter().find(|a| a.key == ch) {
-                        if action.run != "native" {
-                            BarApp::spawn_command(&action.run);
-                        }
+                        self.run_action(action);
                         return KeyResult::Action;
                     }
                 }

@@ -1,120 +1,249 @@
 use serde_json::{json, Value};
-use std::fs;
-use std::process::Command;
 
-fn read_sysfs_battery() -> (i64, String, i64) {
-    let bat_dirs: Vec<_> = fs::read_dir("/sys/class/power_supply/")
-        .into_iter()
-        .flatten()
-        .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.file_name()
-                .to_string_lossy()
-                .starts_with("BAT")
-        })
-        .collect();
+use smithay_client_toolkit::reexports::calloop::channel::Sender;
 
-    let Some(bat) = bat_dirs.first() else {
-        return (0, "Unknown".into(), 0);
-    };
+// ---- D-Bus proxies ----
 
-    let path = bat.path();
-    let capacity = fs::read_to_string(path.join("capacity"))
-        .ok()
-        .and_then(|s| s.trim().parse::<i64>().ok())
-        .unwrap_or(0);
-    let status = fs::read_to_string(path.join("status"))
-        .ok()
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|| "Unknown".into());
-
-    // Estimate time remaining from energy_now and power_now
-    let energy_now = fs::read_to_string(path.join("energy_now"))
-        .ok()
-        .and_then(|s| s.trim().parse::<f64>().ok());
-    let power_now = fs::read_to_string(path.join("power_now"))
-        .ok()
-        .and_then(|s| s.trim().parse::<f64>().ok());
-
-    let time_secs = match (energy_now, power_now) {
-        (Some(e), Some(p)) if p > 0.0 => ((e / p) * 3600.0) as i64,
-        _ => 0,
-    };
-
-    (capacity, status, time_secs)
+#[zbus::proxy(
+    interface = "org.freedesktop.UPower",
+    default_service = "org.freedesktop.UPower",
+    default_path = "/org/freedesktop/UPower"
+)]
+trait UPower {
+    fn enumerate_devices(&self) -> zbus::Result<Vec<zbus::zvariant::OwnedObjectPath>>;
 }
 
-fn upower_battery() -> Option<(i64, String, i64)> {
-    let list = Command::new("upower").arg("-e").output().ok()?;
-    let list_str = String::from_utf8_lossy(&list.stdout);
-    let bat = list_str.lines().find(|l| l.contains("battery"))?;
-
-    let info = Command::new("upower").arg("-i").arg(bat).output().ok()?;
-    let info_str = String::from_utf8_lossy(&info.stdout);
-
-    let capacity = info_str
-        .lines()
-        .find(|l| l.contains("percentage"))
-        .and_then(|l| {
-            l.chars()
-                .filter(|c| c.is_ascii_digit())
-                .collect::<String>()
-                .parse::<i64>()
-                .ok()
-        })
-        .unwrap_or(0);
-
-    let status = info_str
-        .lines()
-        .find(|l| l.contains("state:"))
-        .map(|l| l.split_whitespace().last().unwrap_or("Unknown").to_string())
-        .unwrap_or_else(|| "Unknown".into());
-
-    // Parse "time to empty/full" line
-    let time_secs = info_str
-        .lines()
-        .find(|l| l.contains("time to"))
-        .map(|l| {
-            let mut secs: i64 = 0;
-            let parts: Vec<&str> = l.split_whitespace().collect();
-            for w in parts.windows(2) {
-                if let Ok(v) = w[0].parse::<f64>() {
-                    if w[1].starts_with("hour") {
-                        secs += (v * 3600.0) as i64;
-                    } else if w[1].starts_with("minute") {
-                        secs += (v * 60.0) as i64;
-                    }
-                }
-            }
-            secs
-        })
-        .unwrap_or(0);
-
-    Some((capacity, status, time_secs))
+// UPower device states (from upower-glib enum):
+// 1 charging  2 discharging  3 empty  4 fully-charged  5 pending-charge  6 pending-discharge
+#[zbus::proxy(
+    interface = "org.freedesktop.UPower.Device",
+    default_service = "org.freedesktop.UPower"
+)]
+trait UPowerDevice {
+    #[zbus(property)]
+    fn percentage(&self) -> zbus::Result<f64>;
+    #[zbus(property)]
+    fn state(&self) -> zbus::Result<u32>;
+    #[zbus(property)]
+    fn time_to_empty(&self) -> zbus::Result<i64>;
+    #[zbus(property)]
+    fn time_to_full(&self) -> zbus::Result<i64>;
+    #[zbus(property, name = "Type")]
+    fn device_type(&self) -> zbus::Result<u32>;
 }
 
-fn get_profile() -> String {
-    Command::new("powerprofilesctl")
-        .arg("get")
-        .output()
-        .ok()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "unknown".into())
+#[zbus::proxy(
+    interface = "org.freedesktop.login1.Manager",
+    default_service = "org.freedesktop.login1",
+    default_path = "/org/freedesktop/login1"
+)]
+trait Login1Manager {
+    fn suspend(&self, interactive: bool) -> zbus::Result<()>;
+    fn power_off(&self, interactive: bool) -> zbus::Result<()>;
+    fn reboot(&self, interactive: bool) -> zbus::Result<()>;
+}
+
+const UPOWER_TYPE_BATTERY: u32 = 2;
+
+fn state_label(state: u32) -> &'static str {
+    match state {
+        1 => "charging",
+        2 => "discharging",
+        3 => "empty",
+        4 => "fully-charged",
+        5 => "pending-charge",
+        6 => "pending-discharge",
+        _ => "unknown",
+    }
+}
+
+fn empty() -> Value {
+    json!({
+        "capacity": 0,
+        "status": "unknown",
+        "charging": false,
+        "time_remaining_secs": 0,
+    })
+}
+
+async fn battery_path(conn: &zbus::Connection) -> zbus::Result<Option<zbus::zvariant::OwnedObjectPath>> {
+    let up = UPowerProxy::new(conn).await?;
+    let devs = up.enumerate_devices().await?;
+    for path in devs {
+        let dev = UPowerDeviceProxy::builder(conn).path(path.as_ref())?.build().await?;
+        if dev.device_type().await.unwrap_or(0) == UPOWER_TYPE_BATTERY {
+            return Ok(Some(path));
+        }
+    }
+    Ok(None)
+}
+
+async fn snapshot(conn: &zbus::Connection) -> Value {
+    match snapshot_inner(conn).await {
+        Ok(v) => v,
+        Err(e) => {
+            log::error!("session snapshot failed: {e}");
+            empty()
+        }
+    }
+}
+
+async fn snapshot_inner(conn: &zbus::Connection) -> zbus::Result<Value> {
+    let Some(path) = battery_path(conn).await? else {
+        return Ok(empty());
+    };
+    let dev = UPowerDeviceProxy::builder(conn).path(path.as_ref())?.build().await?;
+
+    let pct = dev.percentage().await.unwrap_or(0.0).round() as i64;
+    let state = dev.state().await.unwrap_or(0);
+    let charging = matches!(state, 1 | 4 | 5);
+    let time_secs = if charging {
+        dev.time_to_full().await.unwrap_or(0)
+    } else {
+        dev.time_to_empty().await.unwrap_or(0)
+    };
+
+    Ok(json!({
+        "capacity": pct,
+        "status": state_label(state),
+        "charging": charging,
+        "time_remaining_secs": time_secs,
+    }))
 }
 
 pub fn poll(_params: &serde_json::Map<String, Value>) -> Value {
-    let (capacity, status, time_secs) = upower_battery()
-        .unwrap_or_else(|| read_sysfs_battery());
-
-    let charging = status == "charging" || status == "fully-charged";
-    let profile = get_profile();
-
-    json!({
-        "capacity": capacity,
-        "status": status,
-        "charging": charging,
-        "time_remaining_secs": time_secs,
-        "profile": profile,
+    async_io::block_on(async {
+        let conn = match zbus::Connection::system().await {
+            Ok(c) => c,
+            Err(e) => {
+                log::error!("session poll: system bus connect failed: {e}");
+                return empty();
+            }
+        };
+        snapshot(&conn).await
     })
+}
+
+pub fn subscribe(
+    _params: serde_json::Map<String, Value>,
+    sender: Sender<(String, Value)>,
+    id: String,
+) {
+    use futures_util::StreamExt;
+
+    async_io::block_on(async {
+        let conn = match zbus::Connection::system().await {
+            Ok(c) => c,
+            Err(e) => {
+                log::error!("session subscribe: system bus connect failed: {e}");
+                return;
+            }
+        };
+
+        let val = snapshot(&conn).await;
+        if sender.send((id.clone(), val)).is_err() {
+            return;
+        }
+
+        let path = match battery_path(&conn).await {
+            Ok(Some(p)) => p,
+            _ => {
+                // No battery — slow-poll fallback (e.g. desktop machines).
+                loop {
+                    async_io::Timer::after(std::time::Duration::from_secs(60)).await;
+                    let val = snapshot(&conn).await;
+                    if sender.send((id.clone(), val)).is_err() {
+                        return;
+                    }
+                }
+            }
+        };
+
+        let dev = match UPowerDeviceProxy::builder(&conn).path(path.as_ref()) {
+            Ok(b) => match b.build().await {
+                Ok(d) => d,
+                Err(e) => {
+                    log::error!("session subscribe: UPower device proxy failed: {e}");
+                    return;
+                }
+            },
+            Err(e) => {
+                log::error!("session subscribe: UPower device path invalid: {e}");
+                return;
+            }
+        };
+
+        let mut pct = dev.receive_percentage_changed().await.fuse();
+        let mut state = dev.receive_state_changed().await.fuse();
+        let mut tte = dev.receive_time_to_empty_changed().await.fuse();
+        let mut ttf = dev.receive_time_to_full_changed().await.fuse();
+
+        loop {
+            futures_util::select! {
+                _ = pct.next() => {}
+                _ = state.next() => {}
+                _ = tte.next() => {}
+                _ = ttf.next() => {}
+            };
+            async_io::Timer::after(std::time::Duration::from_millis(100)).await;
+            let val = snapshot(&conn).await;
+            if sender.send((id.clone(), val)).is_err() {
+                return;
+            }
+        }
+    });
+}
+
+// ---- Actions (logind) ----
+
+fn spawn_login1<F>(label: &'static str, f: F)
+where
+    F: FnOnce(zbus::Connection) -> std::pin::Pin<Box<dyn std::future::Future<Output = zbus::Result<()>> + Send>>
+        + Send
+        + 'static,
+{
+    std::thread::spawn(move || {
+        async_io::block_on(async move {
+            let conn = match zbus::Connection::system().await {
+                Ok(c) => c,
+                Err(e) => {
+                    log::error!("session {label}: connect failed: {e}");
+                    return;
+                }
+            };
+            if let Err(e) = f(conn).await {
+                log::error!("session {label} failed: {e}");
+            }
+        });
+    });
+}
+
+pub fn cli_action(name: &str, _args: &[String]) -> Result<String, String> {
+    match name {
+        "suspend" => {
+            log::info!("session: suspend");
+            spawn_login1("suspend", |conn| Box::pin(async move {
+                let mgr = Login1ManagerProxy::new(&conn).await?;
+                mgr.suspend(false).await
+            }));
+            Ok("suspending".into())
+        }
+        "shutdown" => {
+            log::info!("session: shutdown");
+            spawn_login1("shutdown", |conn| Box::pin(async move {
+                let mgr = Login1ManagerProxy::new(&conn).await?;
+                mgr.power_off(false).await
+            }));
+            Ok("shutting down".into())
+        }
+        "reboot" => {
+            log::info!("session: reboot");
+            spawn_login1("reboot", |conn| Box::pin(async move {
+                let mgr = Login1ManagerProxy::new(&conn).await?;
+                mgr.reboot(false).await
+            }));
+            Ok("rebooting".into())
+        }
+        other => Err(format!("unknown session action: {other}")),
+    }
 }

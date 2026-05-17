@@ -9,7 +9,7 @@ kind = "wallpaper"
 interval = 30
 
 [params]
-dir = "~/Pictures/Wallpapers"
+# dir defaults to $(xdg-user-dir PICTURES)/wallpapers; override here if needed
 fill = "crop"
 transition = "fade"
 transition-duration = "1"

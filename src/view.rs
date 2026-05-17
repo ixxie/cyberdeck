@@ -444,7 +444,23 @@ pub(crate) fn mod_content(
         let hints = vec![Elem::text(hint_strs.join("  ")).fg(pal.idle)];
 
         let breadcrumb = render_breadcrumb_elems(module, template_engine, pal.active);
-        let left = vec![pill(breadcrumb, bg, pc).path("__back")];
+        let mut left = vec![pill(breadcrumb, bg, pc).path("__back")];
+
+        let tabs = deep.tabs();
+        let active_tab = deep.active_tab();
+        for (i, name) in tabs.iter().enumerate() {
+            let is_active = i == active_tab;
+            let fg_col = if is_active { pal.selected } else { pal.idle };
+            let elems = vec![Elem::text(name.clone()).fg(fg_col)];
+            let tab_pill = if is_active {
+                pill_bright(elems, bg, pc)
+            } else {
+                pill(elems, bg, pc)
+            }
+            .path(format!("__tab:{i}"));
+            left.push(tab_pill);
+        }
+
         let right = vec![pill(hints, bg, pc)];
 
         return Some(BarContent { left, center, right, gap, left_w: None, right_w: None });

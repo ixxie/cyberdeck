@@ -52,7 +52,8 @@ pub fn build_cli() -> Command {
             if action.contains(' ') {
                 multi_word.push(action);
             } else {
-                sub = sub.subcommand(Command::new(*action).about(*action));
+                sub = sub.subcommand(Command::new(*action).about(*action)
+                    .arg(Arg::new("args").num_args(..).trailing_var_arg(true)));
             }
         }
         if !multi_word.is_empty() {
@@ -91,8 +92,11 @@ pub fn parse() -> Cli {
                 other => other,
             };
             let mut args = vec![module_name.to_string()];
-            if let Some((action, _)) = sub.subcommand() {
+            if let Some((action, action_matches)) = sub.subcommand() {
                 args.push(action.to_string());
+                if let Some(vals) = action_matches.get_many::<String>("args") {
+                    args.extend(vals.cloned());
+                }
             } else if let Some(vals) = sub.get_many::<String>("args") {
                 args.extend(vals.cloned());
             }
@@ -187,11 +191,8 @@ const CONFIG_TEMPLATE: &str = r##"# Cyberdeck configuration
 # [bar.modules.brightness]      # screen brightness
                                 # deps: brightnessctl
 
-# [bar.modules.outputs]         # audio output / speakers
-                                # deps: wireplumber
-
-# [bar.modules.inputs]          # audio input / microphone
-                                # deps: wireplumber
+# [bar.modules.audio]           # speakers, microphones, and audio routing
+                                # deps: wireplumber, rnnoise-plugin (optional)
 
 # [bar.modules.media]           # now playing
                                 # deps: playerctl
@@ -210,8 +211,8 @@ const CONFIG_TEMPLATE: &str = r##"# Cyberdeck configuration
                                 # deps: slurp, wl-screenrec
 
 # [bar.modules.wallpaper]       # wallpaper cycling
-                                # deps: swww
-# dir = "~/Pictures/wallpapers"
+                                # deps: swww, xdg-user-dirs
+# dir defaults to $(xdg-user-dir PICTURES)/wallpapers
 "##;
 
 fn run_module_cmd(args: &[String], json: bool) {

@@ -1,14 +1,14 @@
 mod actions;
-mod bluetooth;
+pub mod audio;
+pub mod bluetooth;
 mod keyboard;
-pub mod inputs;
 pub mod media;
-pub mod outputs;
 mod brightness;
 mod launcher;
 mod network;
 mod notifications;
-mod session;
+pub mod profiles;
+pub mod session;
 pub mod recording;
 mod storage;
 mod system;
@@ -70,8 +70,8 @@ pub fn register<D: 'static>(
         "storage" => storage::poll,
         "launcher" => launcher::poll,
         "session" => session::poll,
-        "outputs" => outputs::poll,
-        "inputs" => inputs::poll,
+        "profiles" => profiles::poll,
+        "audio" => audio::poll,
         "media" => media::poll,
         "network" => network::poll,
         "bluetooth" => bluetooth::poll,
@@ -93,9 +93,11 @@ pub fn register<D: 'static>(
         "window" => Some(window::subscribe),
         "media" => Some(media::subscribe),
         "brightness" => Some(brightness::subscribe),
-        "outputs" => Some(outputs::subscribe),
-        "inputs" => Some(inputs::subscribe),
+        "audio" => Some(audio::subscribe),
         "network" => Some(network::subscribe),
+        "bluetooth" => Some(bluetooth::subscribe),
+        "session" => Some(session::subscribe),
+        "profiles" => Some(profiles::subscribe),
         _ => None,
     };
 
@@ -168,16 +170,22 @@ pub trait InteractiveModule {
     fn exec_action(&mut self, _name: &str, _args: &[String], _data: &serde_json::Value) -> Option<String> {
         None
     }
+
+    /// Tab labels for modules that present multiple sub-views (e.g. audio →
+    /// speakers / microphones). Empty = no tabs. Indicated next to the title;
+    /// switched with Tab / Shift+Tab.
+    fn tabs(&self) -> Vec<String> { Vec::new() }
+    fn active_tab(&self) -> usize { 0 }
 }
 
 pub fn create_interactive(
     module_type: &str,
+    id: &str,
     module: &crate::config::ModuleDef,
     icon_resolver: &dyn Fn(&str) -> String,
 ) -> Option<Box<dyn InteractiveModule>> {
     match module_type {
-        "outputs" => Some(Box::new(outputs::OutputsDeep::new())),
-        "inputs" => Some(Box::new(inputs::InputsDeep::new())),
+        "audio" => Some(Box::new(audio::AudioDeep::new(icon_resolver))),
         "media" => Some(Box::new(media::MediaDeep::new())),
         "notifications" => Some(Box::new(notifications::NotificationsDeep::new())),
         "calendar" => Some(Box::new(calendar::CalendarDeep::new())),
@@ -187,7 +195,7 @@ pub fn create_interactive(
         "wallpaper" => Some(Box::new(wallpaper_deep::WallpaperDeep::new(module))),
         "recording" => Some(Box::new(recording::RecordingDeep::new(icon_resolver))),
         "actions" => Some(Box::new(actions::ActionPalette::new(
-            &module.name,
+            id,
             &module.actions,
             icon_resolver,
         ))),

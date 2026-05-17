@@ -14,21 +14,21 @@ condition = "{{ capacity < 20 and not charging }}"
 
 [[actions]]
 name = "suspend"
-run = "systemctl suspend"
+run = "native"
 key = "z"
 label = "suspend"
 icon = "moon"
 
 [[actions]]
 name = "shutdown"
-run = "shutdown now"
+run = "native"
 key = "x"
 label = "shutdown"
 icon = "power"
 
 [[actions]]
 name = "reboot"
-run = "shutdown -r now"
+run = "native"
 key = "r"
 label = "reboot"
 icon = "arrow-clockwise"

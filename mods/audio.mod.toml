@@ -1,16 +1,20 @@
-name = "Outputs"
-description = "Speaker and audio output"
+name = "Audio"
+description = "Speakers, microphones, and audio routing"
 icon = "speaker-high"
-type = "outputs"
+type = "audio"
 
 [source]
 type = "native"
-kind = "outputs"
+kind = "audio"
 interval = 1
 
-[badges.default]
+[badges.sink]
 template = '{% if muted %}{{ "speaker-slash" | icon }}{% else %}{{ "speaker-high" | icon }}{% endif %}'
 condition = "{{ muted }}"
+
+[badges.source]
+template = '{{ "microphone-slash" | icon }}'
+condition = "{{ source_muted }}"
 
 [widget]
 template = '{% if muted %}muted{% else %}{{ volume | meter(max=100, width=20) }}{% endif %}'
@@ -30,10 +34,45 @@ name = "mute"
 run = "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle"
 label = "mute"
 
+[[actions]]
+name = "mic-up"
+run = "wpctl set-volume @DEFAULT_AUDIO_SOURCE@ 5%+"
+label = "mic up"
+
+[[actions]]
+name = "mic-down"
+run = "wpctl set-volume @DEFAULT_AUDIO_SOURCE@ 5%-"
+label = "mic down"
+
+[[actions]]
+name = "mic-mute"
+run = "wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle"
+label = "mic mute"
+
+[[actions]]
+name = "denoise"
+run = "native"
+label = "denoise"
+
 [[hooks]]
 condition = '{{ changed(key="volume") or changed(key="muted") }}'
 action = "spotlight"
 timeout = 3
+
+[[key-hints]]
+key = "←→"
+action = ""
+label = "select"
+
+[[key-hints]]
+key = "⏎"
+action = ""
+label = "default sink"
+
+[[key-hints]]
+key = "i"
+action = ""
+label = "default mic"
 
 [[key-hints]]
 key = "↑↓"
@@ -46,9 +85,9 @@ action = ""
 label = "mute"
 
 [[key-hints]]
-key = "Tab"
+key = "n"
 action = ""
-label = "device"
+label = "denoise"
 
 [[key-hints]]
 key = "Esc"

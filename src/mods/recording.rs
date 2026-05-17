@@ -33,6 +33,24 @@ fn slurp_region() -> Option<String> {
     if s.is_empty() { None } else { Some(s) }
 }
 
+fn recordings_dir() -> String {
+    if let Ok(dir) = std::env::var("XDG_VIDEOS_DIR") {
+        if !dir.is_empty() {
+            return dir;
+        }
+    }
+    if let Ok(out) = Command::new("xdg-user-dir").arg("VIDEOS").output() {
+        if out.status.success() {
+            let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !s.is_empty() {
+                return s;
+            }
+        }
+    }
+    let home = std::env::var("HOME").unwrap_or_default();
+    format!("{home}/Videos")
+}
+
 fn default_mic_source() -> Option<String> {
     let out = Command::new("pactl")
         .args(["get-default-source"])
@@ -51,8 +69,7 @@ pub fn start_recording(device_audio: bool, mic_audio: bool) {
     std::thread::spawn(move || {
         let Some(region) = slurp_region() else { return };
 
-        let home = std::env::var("HOME").unwrap_or_default();
-        let dir = format!("{home}/Videos/snips");
+        let dir = format!("{}/snips", recordings_dir());
         let _ = std::fs::create_dir_all(&dir);
         let ts = chrono::Local::now().format("%Y-%m-%dT%H-%M-%S");
         let path = format!("{dir}/{ts}.mp4");

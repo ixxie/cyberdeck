@@ -18,23 +18,28 @@ template = '''
 
 [[actions]]
 name = "on"
-run = "bluetoothctl power on"
+run = "native"
 label = "power on"
 
 [[actions]]
 name = "off"
-run = "bluetoothctl power off"
+run = "native"
 label = "power off"
 
 [[actions]]
 name = "connect"
-run = "bluetoothctl connect"
+run = "native"
 label = "connect"
 
 [[actions]]
 name = "disconnect"
-run = "bluetoothctl disconnect"
+run = "native"
 label = "disconnect"
+
+[[actions]]
+name = "scan"
+run = "native"
+label = "scan"
 
 [[key-hints]]
 key = "Esc"

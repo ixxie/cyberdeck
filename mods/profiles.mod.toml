@@ -4,8 +4,8 @@ icon = "scales"
 type = "actions"
 
 [source]
-type = "poll"
-command = ["sh", "-c", """printf '{"profile":"%s"}' "$(powerprofilesctl get)" """]
+type = "native"
+kind = "profiles"
 interval = 5
 
 [badges.default]
@@ -14,21 +14,21 @@ condition = '{{ profile != "balanced" }}'
 
 [[actions]]
 name = "power-saver"
-run = "powerprofilesctl set power-saver"
+run = "native"
 key = "s"
 label = "saver"
 icon = "leaf"
 
 [[actions]]
 name = "balanced"
-run = "powerprofilesctl set balanced"
+run = "native"
 key = "b"
 label = "balanced"
 icon = "scales"
 
 [[actions]]
 name = "performance"
-run = "powerprofilesctl set performance"
+run = "native"
 key = "p"
 label = "performance"
 icon = "lightning"

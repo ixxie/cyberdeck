@@ -249,7 +249,7 @@ impl BarApp {
         let icon_resolver = |name: &str| template_engine.render_icon(name);
         for (id, module) in &config.bar.modules {
             if let Some(mt) = &module.module_type {
-                if let Some(deep) = crate::mods::create_interactive(mt, module, &icon_resolver) {
+                if let Some(deep) = crate::mods::create_interactive(mt, id, module, &icon_resolver) {
                     interactive.insert(id.clone(), deep);
                 }
             }

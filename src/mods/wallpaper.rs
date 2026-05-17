@@ -31,8 +31,29 @@ fn get_param<'a>(params: &'a serde_json::Map<String, Value>, key: &str, default:
         .unwrap_or(default)
 }
 
+fn default_wallpaper_dir() -> String {
+    if let Ok(dir) = std::env::var("XDG_PICTURES_DIR") {
+        if !dir.is_empty() {
+            return format!("{dir}/wallpapers");
+        }
+    }
+    if let Ok(out) = Command::new("xdg-user-dir").arg("PICTURES").output() {
+        if out.status.success() {
+            let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !s.is_empty() {
+                return format!("{s}/wallpapers");
+            }
+        }
+    }
+    let home = std::env::var("HOME").unwrap_or_default();
+    format!("{home}/Pictures/wallpapers")
+}
+
 fn wallpaper_dir(params: &serde_json::Map<String, Value>) -> String {
-    expand_tilde(get_param(params, "dir", "~/Pictures/Wallpapers"))
+    match params.get("dir").and_then(|v| v.as_str()) {
+        Some(s) if !s.is_empty() => expand_tilde(s),
+        _ => default_wallpaper_dir(),
+    }
 }
 
 fn read_state() -> Value {

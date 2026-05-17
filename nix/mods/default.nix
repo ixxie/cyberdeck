@@ -11,18 +11,17 @@ in
   };
 
   modules = {
+    audio = importMod "audio";
     bluetooth = importMod "bluetooth";
     brightness = importMod "brightness";
     calendar = importMod "calendar";
     clipboard = importMod "clipboard";
     keyboard = importMod "keyboard";
 
-    inputs = importMod "inputs";
     mounts = importMod "mounts";
     network = importMod "network";
     notifications = importMod "notifications";
     media = importMod "media";
-    outputs = importMod "outputs";
     profiles = importMod "profiles";
     session = importMod "session";
     screenshot = importMod "screenshot";

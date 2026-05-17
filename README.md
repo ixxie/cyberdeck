@@ -116,10 +116,8 @@ Import the NixOS module and enable modules:
       storage.enable = true;
       screenshot.enable = true;
       recording.enable = true;
-      wallpaper = {
-        enable = true;
-        dir = "~/Pictures/wallpapers";
-      };
+      wallpaper.enable = true;
+      # defaults to $(xdg-user-dir PICTURES)/wallpapers; override with `dir = "..."`
     };
   };
 }

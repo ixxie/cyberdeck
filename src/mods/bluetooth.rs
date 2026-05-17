@@ -1,79 +1,369 @@
 use serde_json::{json, Value};
-use std::process::Command;
+use std::collections::HashMap;
 
+use smithay_client_toolkit::reexports::calloop::channel::Sender;
 use smithay_client_toolkit::seat::keyboard::{KeyEvent, Keysym};
 
-use crate::bar::BarApp;
 use crate::color::Rgba;
 use crate::config::KeyHintDef;
 use crate::layout::Elem;
 use crate::mods::{InteractiveModule, KeyResult};
 
-pub fn poll(_params: &serde_json::Map<String, Value>) -> Value {
-    let powered = get_powered();
-    let devices = get_devices();
+// -- D-Bus proxies for BlueZ --
 
-    json!({
+#[zbus::proxy(
+    interface = "org.bluez.Adapter1",
+    default_service = "org.bluez"
+)]
+trait Adapter1 {
+    #[zbus(property)]
+    fn powered(&self) -> zbus::Result<bool>;
+    #[zbus(property)]
+    fn set_powered(&self, value: bool) -> zbus::Result<()>;
+
+    fn start_discovery(&self) -> zbus::Result<()>;
+    fn stop_discovery(&self) -> zbus::Result<()>;
+}
+
+#[zbus::proxy(
+    interface = "org.bluez.Device1",
+    default_service = "org.bluez"
+)]
+trait Device1 {
+    #[zbus(property)]
+    fn name(&self) -> zbus::Result<String>;
+
+    #[zbus(property)]
+    fn address(&self) -> zbus::Result<String>;
+
+    #[zbus(property)]
+    fn connected(&self) -> zbus::Result<bool>;
+
+    fn connect(&self) -> zbus::Result<()>;
+    fn disconnect(&self) -> zbus::Result<()>;
+}
+
+#[zbus::proxy(
+    interface = "org.freedesktop.DBus.ObjectManager",
+    default_service = "org.bluez",
+    default_path = "/"
+)]
+trait ObjectManager {
+    fn get_managed_objects(
+        &self,
+    ) -> zbus::Result<HashMap<
+        zbus::zvariant::OwnedObjectPath,
+        HashMap<String, HashMap<String, zbus::zvariant::OwnedValue>>,
+    >>;
+
+    #[zbus(signal)]
+    fn interfaces_added(
+        &self,
+        path: zbus::zvariant::OwnedObjectPath,
+        ifaces: HashMap<String, HashMap<String, zbus::zvariant::OwnedValue>>,
+    ) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    fn interfaces_removed(
+        &self,
+        path: zbus::zvariant::OwnedObjectPath,
+        ifaces: Vec<String>,
+    ) -> zbus::Result<()>;
+}
+
+// -- Snapshot --
+
+fn empty() -> Value {
+    json!({ "powered": false, "devices": [] })
+}
+
+async fn snapshot(conn: &zbus::Connection) -> Value {
+    match snapshot_inner(conn).await {
+        Ok(v) => v,
+        Err(e) => {
+            log::error!("bluetooth snapshot failed: {e}");
+            empty()
+        }
+    }
+}
+
+async fn snapshot_inner(conn: &zbus::Connection) -> zbus::Result<Value> {
+    let om = ObjectManagerProxy::new(conn).await?;
+    let objects = om.get_managed_objects().await?;
+
+    let mut powered = false;
+    let mut devices: Vec<Value> = Vec::new();
+
+    for (path, ifaces) in &objects {
+        if ifaces.contains_key("org.bluez.Adapter1") {
+            if let Ok(adapter) = Adapter1Proxy::builder(conn).path(path.as_ref())?.build().await {
+                if adapter.powered().await.unwrap_or(false) {
+                    powered = true;
+                }
+            }
+        }
+        if ifaces.contains_key("org.bluez.Device1") {
+            if let Ok(dev) = Device1Proxy::builder(conn).path(path.as_ref())?.build().await {
+                let name = dev.name().await.unwrap_or_default();
+                let mac = dev.address().await.unwrap_or_default();
+                let connected = dev.connected().await.unwrap_or(false);
+                if name.is_empty() && mac.is_empty() {
+                    continue;
+                }
+                devices.push(json!({
+                    "mac": mac,
+                    "name": name,
+                    "connected": connected,
+                    "path": path.as_str(),
+                }));
+            }
+        }
+    }
+
+    // Connected first, then alphabetical
+    devices.sort_by(|a, b| {
+        let ac = a.get("connected").and_then(|v| v.as_bool()).unwrap_or(false);
+        let bc = b.get("connected").and_then(|v| v.as_bool()).unwrap_or(false);
+        bc.cmp(&ac).then_with(|| {
+            let an = a.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let bn = b.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            an.cmp(bn)
+        })
+    });
+
+    Ok(json!({
         "powered": powered,
         "devices": devices,
+    }))
+}
+
+pub fn poll(_params: &serde_json::Map<String, Value>) -> Value {
+    async_io::block_on(async {
+        let conn = match zbus::Connection::system().await {
+            Ok(c) => c,
+            Err(e) => {
+                log::error!("bluetooth poll: failed to connect to system bus: {e}");
+                return empty();
+            }
+        };
+        snapshot(&conn).await
     })
 }
 
-fn get_powered() -> bool {
-    Command::new("bluetoothctl")
-        .arg("show")
-        .output()
-        .ok()
-        .map(|o| {
-            let text = String::from_utf8_lossy(&o.stdout);
-            text.lines()
-                .find(|l| l.contains("Powered:"))
-                .map(|l| l.contains("yes"))
-                .unwrap_or(false)
-        })
-        .unwrap_or(false)
-}
+// -- Subscribe: event-driven updates via PropertiesChanged + InterfacesAdded/Removed --
 
-fn get_devices() -> Vec<Value> {
-    let out = match Command::new("bluetoothctl")
-        .arg("devices")
-        .output()
-    {
-        Ok(o) => o,
-        Err(_) => return vec![],
-    };
-    let text = String::from_utf8_lossy(&out.stdout);
+pub fn subscribe(
+    _params: serde_json::Map<String, Value>,
+    sender: Sender<(String, Value)>,
+    id: String,
+) {
+    use futures_util::StreamExt;
 
-    text.lines()
-        .filter_map(|line| {
-            // Format: "Device AA:BB:CC:DD:EE:FF Some Name"
-            let parts: Vec<&str> = line.splitn(3, ' ').collect();
-            if parts.len() < 3 {
-                return None;
+    async_io::block_on(async {
+        let conn = match zbus::Connection::system().await {
+            Ok(c) => c,
+            Err(e) => {
+                log::error!("bluetooth: failed to connect to system bus: {e}");
+                return;
             }
-            let mac = parts[1];
-            let name = parts[2];
+        };
 
-            let connected = Command::new("bluetoothctl")
-                .args(["info", mac])
-                .output()
-                .ok()
-                .map(|o| {
-                    String::from_utf8_lossy(&o.stdout)
-                        .contains("Connected: yes")
-                })
-                .unwrap_or(false);
+        // Initial snapshot
+        let val = snapshot(&conn).await;
+        if sender.send((id.clone(), val)).is_err() {
+            return;
+        }
 
-            Some(json!({
-                "mac": mac,
-                "name": name,
-                "connected": connected,
-            }))
-        })
-        .collect()
+        let om = match ObjectManagerProxy::new(&conn).await {
+            Ok(p) => p,
+            Err(e) => {
+                log::error!("bluetooth: failed to create ObjectManager proxy: {e}");
+                return;
+            }
+        };
+
+        let mut added = match om.receive_interfaces_added().await {
+            Ok(s) => s.fuse(),
+            Err(e) => {
+                log::error!("bluetooth: failed to subscribe to InterfacesAdded: {e}");
+                return;
+            }
+        };
+        let mut removed = match om.receive_interfaces_removed().await {
+            Ok(s) => s.fuse(),
+            Err(e) => {
+                log::error!("bluetooth: failed to subscribe to InterfacesRemoved: {e}");
+                return;
+            }
+        };
+
+        // Watch PropertiesChanged on all org.bluez paths.
+        // dbus match rule: type=signal, sender=org.bluez, interface=org.freedesktop.DBus.Properties, member=PropertiesChanged
+        let rule = zbus::MatchRule::builder()
+            .msg_type(zbus::message::Type::Signal)
+            .sender("org.bluez").unwrap()
+            .interface("org.freedesktop.DBus.Properties").unwrap()
+            .member("PropertiesChanged").unwrap()
+            .build();
+        let mut props = match zbus::MessageStream::for_match_rule(rule, &conn, None).await {
+            Ok(s) => s.fuse(),
+            Err(e) => {
+                log::error!("bluetooth: failed to subscribe to PropertiesChanged: {e}");
+                return;
+            }
+        };
+
+        loop {
+            futures_util::select! {
+                _ = added.next() => {}
+                _ = removed.next() => {}
+                _ = props.next() => {}
+            };
+
+            // Debounce — bluez often emits clusters of property changes
+            async_io::Timer::after(std::time::Duration::from_millis(150)).await;
+
+            let val = snapshot(&conn).await;
+            if sender.send((id.clone(), val)).is_err() {
+                return;
+            }
+        }
+    });
 }
 
-// --- Deep module ---
+// -- Action helpers (run off the bar thread; D-Bus calls can block on real BT IO) --
+
+fn spawn_action<F>(label: &'static str, f: F)
+where
+    F: FnOnce(zbus::Connection) -> std::pin::Pin<Box<dyn std::future::Future<Output = zbus::Result<()>> + Send>>
+        + Send
+        + 'static,
+{
+    std::thread::spawn(move || {
+        async_io::block_on(async move {
+            let conn = match zbus::Connection::system().await {
+                Ok(c) => c,
+                Err(e) => {
+                    log::error!("bluetooth {label}: connect failed: {e}");
+                    return;
+                }
+            };
+            if let Err(e) = f(conn).await {
+                log::error!("bluetooth {label} failed: {e}");
+            }
+        });
+    });
+}
+
+fn connect_device(path: String) {
+    log::info!("bluetooth: connect {path}");
+    spawn_action("connect", |conn| Box::pin(async move {
+        let dev = Device1Proxy::builder(&conn)
+            .path(path.as_str())?
+            .build()
+            .await?;
+        dev.connect().await
+    }));
+}
+
+fn disconnect_device(path: String) {
+    log::info!("bluetooth: disconnect {path}");
+    spawn_action("disconnect", |conn| Box::pin(async move {
+        let dev = Device1Proxy::builder(&conn)
+            .path(path.as_str())?
+            .build()
+            .await?;
+        dev.disconnect().await
+    }));
+}
+
+fn start_discovery() {
+    log::info!("bluetooth: scan");
+    spawn_action("scan", |conn| Box::pin(async move {
+        let adapter = Adapter1Proxy::builder(&conn)
+            .path("/org/bluez/hci0")?
+            .build()
+            .await?;
+        adapter.start_discovery().await
+    }));
+}
+
+fn set_powered(on: bool) {
+    log::info!("bluetooth: power {}", if on { "on" } else { "off" });
+    spawn_action(if on { "power on" } else { "power off" }, move |conn| Box::pin(async move {
+        let adapter = Adapter1Proxy::builder(&conn)
+            .path("/org/bluez/hci0")?
+            .build()
+            .await?;
+        adapter.set_powered(on).await
+    }));
+}
+
+/// Disconnect every currently-connected device.
+fn disconnect_all() {
+    log::info!("bluetooth: disconnect all");
+    spawn_action("disconnect all", |conn| Box::pin(async move {
+        let om = ObjectManagerProxy::new(&conn).await?;
+        let objects = om.get_managed_objects().await?;
+        for (path, ifaces) in &objects {
+            if !ifaces.contains_key("org.bluez.Device1") { continue; }
+            if let Ok(dev) = Device1Proxy::builder(&conn).path(path.as_ref())?.build().await {
+                if dev.connected().await.unwrap_or(false) {
+                    if let Err(e) = dev.disconnect().await {
+                        log::warn!("bluetooth: disconnect {} failed: {e}", path.as_str());
+                    }
+                }
+            }
+        }
+        Ok(())
+    }));
+}
+
+/// Look up a device path by MAC address (case-insensitive). Synchronous wrapper
+/// around the async D-Bus query — returns the first matching path or None.
+fn path_for_address(addr: &str) -> Option<String> {
+    let addr_norm = addr.to_uppercase();
+    async_io::block_on(async {
+        let conn = zbus::Connection::system().await.ok()?;
+        let om = ObjectManagerProxy::new(&conn).await.ok()?;
+        let objects = om.get_managed_objects().await.ok()?;
+        for (path, ifaces) in &objects {
+            if !ifaces.contains_key("org.bluez.Device1") { continue; }
+            if let Ok(dev) = Device1Proxy::builder(&conn).path(path.as_ref()).ok()?.build().await {
+                if dev.address().await.ok().map(|a| a.to_uppercase()) == Some(addr_norm.clone()) {
+                    return Some(path.as_str().to_string());
+                }
+            }
+        }
+        None
+    })
+}
+
+/// CLI/IPC action dispatcher. Returns toast text describing what happened.
+pub fn cli_action(name: &str, args: &[String]) -> Result<String, String> {
+    match name {
+        "on" => { set_powered(true); Ok("power on".into()) }
+        "off" => { set_powered(false); Ok("power off".into()) }
+        "scan" => { start_discovery(); Ok("scanning".into()) }
+        "disconnect" => match args.first() {
+            None => { disconnect_all(); Ok("disconnect all".into()) }
+            Some(addr) => match path_for_address(addr) {
+                Some(p) => { disconnect_device(p); Ok(format!("disconnect {addr}")) }
+                None => Err(format!("device not found: {addr}")),
+            },
+        },
+        "connect" => match args.first() {
+            None => Err("connect requires a MAC address".into()),
+            Some(addr) => match path_for_address(addr) {
+                Some(p) => { connect_device(p); Ok(format!("connect {addr}")) }
+                None => Err(format!("device not found: {addr}")),
+            },
+        },
+        other => Err(format!("unknown bluetooth action: {other}")),
+    }
+}
+
+// -- Deep module --
 
 pub struct BluetoothDeep {
     cursor: usize,
@@ -125,10 +415,10 @@ impl InteractiveModule for BluetoothDeep {
 
     fn cursor(&self) -> Option<usize> { Some(self.cursor) }
 
-
-
     fn key_hints(&self) -> Vec<KeyHintDef> {
         vec![
+            KeyHintDef { key: "←→".into(), action: String::new(), label: "select".into(), icon: None },
+            KeyHintDef { key: "⏎".into(), action: String::new(), label: "(dis)connect".into(), icon: None },
             KeyHintDef { key: "s".into(), action: String::new(), label: "scan".into(), icon: None },
         ]
     }
@@ -150,25 +440,48 @@ impl InteractiveModule for BluetoothDeep {
                 KeyResult::Handled
             }
             Keysym::Return => {
-                // Toggle connect/disconnect for selected device
                 if let Some(devices) = data.get("devices").and_then(|v| v.as_array()) {
                     if let Some(dev) = devices.get(self.cursor) {
-                        let mac = dev.get("mac").and_then(|v| v.as_str()).unwrap_or("");
+                        let path = dev.get("path").and_then(|v| v.as_str()).unwrap_or("");
                         let connected = dev.get("connected").and_then(|v| v.as_bool()).unwrap_or(false);
-                        if !mac.is_empty() {
-                            let action = if connected { "disconnect" } else { "connect" };
-                            BarApp::spawn_command(&format!("bluetoothctl {action} {mac}"));
+                        if !path.is_empty() {
+                            if connected {
+                                disconnect_device(path.to_string());
+                            } else {
+                                connect_device(path.to_string());
+                            }
                         }
                     }
                 }
                 KeyResult::Action
             }
             _ if event.utf8.as_deref() == Some("s") => {
-                BarApp::spawn_command("bluetoothctl --timeout 10 scan on");
+                start_discovery();
                 KeyResult::Action
             }
             _ => KeyResult::Ignored,
         }
+    }
+
+    fn activate(&mut self, data: &Value, _sub_path: &[String]) {
+        // Position cursor on the first connected device, falling back to the
+        // first device. Without this the cursor sticks across deep-view
+        // openings and may point at a stale (out-of-bounds) index after the
+        // device list re-sorts on connection state changes.
+        let count = Self::device_count(data);
+        if count == 0 {
+            self.cursor = 0;
+            return;
+        }
+        let first_connected = data
+            .get("devices")
+            .and_then(|v| v.as_array())
+            .and_then(|devs| {
+                devs.iter().position(|d| {
+                    d.get("connected").and_then(|v| v.as_bool()).unwrap_or(false)
+                })
+            });
+        self.cursor = first_connected.unwrap_or(0).min(count - 1);
     }
 
     fn reset(&mut self) {
