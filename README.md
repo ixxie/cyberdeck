@@ -1,5 +1,5 @@
 <div align="right">
-  <a href="https://ixxie.codeberg.page/bergmirror/r/?cb=ixxie/cyberdeck&gh=ixxie/cyberdeck"><img src="https://ixxie.codeberg.page/bergmirror/badge.svg" alt="Codeberg → GitHub mirror"/></a>
+  <a href="https://ixxie.codeberg.page/bergmirror/redirect/?cb=ixxie/cyberdeck&gh=ixxie/cyberdeck"><img src="https://ixxie.codeberg.page/bergmirror/badge.svg" alt="Codeberg → GitHub mirror"/></a>
 </div>
 
 > [!WARNING]  
