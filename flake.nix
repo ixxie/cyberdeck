@@ -52,6 +52,11 @@
 
         cyberdeck = craneLib.buildPackage {
           inherit src nativeBuildInputs buildInputs cargoArtifacts;
+          # winit/smithay/wgpu dlopen these at runtime, so they never end up
+          # on the linker-derived rpath
+          postFixup = ''
+            patchelf --add-rpath ${pkgs.lib.makeLibraryPath buildInputs} $out/bin/cyberdeck
+          '';
         };
       in
       {
