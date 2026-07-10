@@ -15,12 +15,31 @@ pub struct PwDevice {
     pub volume: i64,
     pub muted: bool,
     pub is_default: bool,
+    pub device_id: Option<u32>,
+    pub state: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct BtProfile {
+    pub index: u32,
+    pub name: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct BtDevice {
+    pub device_id: u32,
+    pub name: String,
+    pub path: String,
+    pub connected: bool,
+    pub profile: String,
+    pub profiles: Vec<BtProfile>,
 }
 
 #[derive(Clone, Debug)]
 pub struct PwState {
     pub outputs: Vec<PwDevice>,
     pub inputs: Vec<PwDevice>,
+    pub bt: Vec<BtDevice>,
     pub denoise: bool,
 }
 
@@ -48,8 +67,15 @@ fn do_query() -> PwState {
 
     let mut outputs = Vec::new();
     let mut inputs = Vec::new();
+    let mut bt = Vec::new();
 
     for obj in dump.as_array().unwrap_or(&vec![]) {
+        if obj.get("type").and_then(|v| v.as_str()) == Some("PipeWire:Interface:Device") {
+            if let Some(dev) = parse_bt_device(obj) {
+                bt.push(dev);
+            }
+            continue;
+        }
         if obj.get("type").and_then(|v| v.as_str()) != Some("PipeWire:Interface:Node") {
             continue;
         }
@@ -80,8 +106,13 @@ fn do_query() -> PwState {
         } else {
             default_source.as_deref() == Some(node_name.as_str())
         };
+        let device_id = props.get("device.id").and_then(|v| v.as_u64()).map(|v| v as u32);
+        let state = obj.pointer("/info/state")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
 
-        let device = PwDevice { id, name, volume: vol, muted, is_default };
+        let device = PwDevice { id, name, volume: vol, muted, is_default, device_id, state };
 
         if is_sink {
             outputs.push(device);
@@ -96,7 +127,54 @@ fn do_query() -> PwState {
                 .and_then(|v| v.as_str()) == Some("rnnoise_source")
     });
 
-    PwState { outputs, inputs, denoise }
+    PwState { outputs, inputs, bt, denoise }
+}
+
+// Bluetooth audio devices carry switchable profiles (a2dp = hi-fi output, no
+// mic; headset = bidirectional). Surfacing them lets the UI show and fix the
+// "connected but no mic node" state instead of hiding the device entirely.
+fn parse_bt_device(obj: &Value) -> Option<BtDevice> {
+    let props = obj.pointer("/info/props")?;
+    if props.get("device.api").and_then(|v| v.as_str()) != Some("bluez5") {
+        return None;
+    }
+    let device_id = obj.get("id").and_then(|v| v.as_u64())? as u32;
+    let name = props.get("device.description")
+        .or_else(|| props.get("device.alias"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("Unknown")
+        .to_string();
+    let path = props.get("api.bluez5.path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let connected = props.get("api.bluez5.connection")
+        .and_then(|v| v.as_str())
+        == Some("connected");
+
+    let profile = obj.pointer("/info/params/Profile")
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|p| p.get("name"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("off")
+        .to_string();
+
+    let profiles = obj.pointer("/info/params/EnumProfile")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|p| {
+                    Some(BtProfile {
+                        index: p.get("index").and_then(|v| v.as_u64())? as u32,
+                        name: p.get("name").and_then(|v| v.as_str())?.to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Some(BtDevice { device_id, name, path, connected, profile, profiles })
 }
 
 fn pw_dump() -> Value {

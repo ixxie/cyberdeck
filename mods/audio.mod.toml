@@ -90,6 +90,11 @@ action = ""
 label = "denoise"
 
 [[key-hints]]
+key = "p"
+action = ""
+label = "bt profile"
+
+[[key-hints]]
 key = "Esc"
 action = "back"
 label = "back"

@@ -46,6 +46,23 @@ fn wpctl_status() -> String {
         .unwrap_or_default()
 }
 
+fn profile_index(dev: &pipewire::BtDevice, preferred: &str, prefix: &str) -> Option<u32> {
+    dev.profiles
+        .iter()
+        .find(|p| p.name == preferred)
+        .or_else(|| dev.profiles.iter().find(|p| p.name.starts_with(prefix)))
+        .map(|p| p.index)
+}
+
+fn bt_json(dev: &pipewire::BtDevice) -> Value {
+    json!({
+        "id": dev.device_id,
+        "profile": dev.profile,
+        "a2dp": profile_index(dev, "a2dp-sink", "a2dp-sink"),
+        "hfp": profile_index(dev, "headset-head-unit", "headset"),
+    })
+}
+
 pub fn poll(_params: &serde_json::Map<String, Value>) -> Value {
     let pw = pipewire::query();
 
@@ -60,9 +77,13 @@ pub fn poll(_params: &serde_json::Map<String, Value>) -> Value {
         by_name.entry(d.name.clone()).or_default().1 = Some(d);
     }
 
-    let devices: Vec<Value> = by_name
+    let mut devices: Vec<Value> = by_name
         .into_iter()
         .map(|(name, (out, inp))| {
+            let bt = out
+                .and_then(|d| d.device_id)
+                .or_else(|| inp.and_then(|d| d.device_id))
+                .and_then(|id| pw.bt.iter().find(|b| b.device_id == id));
             json!({
                 "name": name,
                 "out": out.map(|d| json!({
@@ -70,16 +91,34 @@ pub fn poll(_params: &serde_json::Map<String, Value>) -> Value {
                     "default": d.is_default,
                     "volume": d.volume,
                     "muted": d.muted,
+                    "error": d.state == "error",
                 })),
                 "in": inp.map(|d| json!({
                     "id": d.id,
                     "default": d.is_default,
                     "volume": d.volume,
                     "muted": d.muted,
+                    "error": d.state == "error",
                 })),
+                "bt": bt.map(bt_json),
             })
         })
         .collect();
+
+    // Bluetooth devices whose active profile exposes no nodes at all (profile
+    // "off") would otherwise vanish from the UI while still being connected.
+    for b in &pw.bt {
+        let covered = pw.outputs.iter().chain(&pw.inputs)
+            .any(|d| d.device_id == Some(b.device_id));
+        if !covered {
+            devices.push(json!({
+                "name": b.name,
+                "out": Value::Null,
+                "in": Value::Null,
+                "bt": bt_json(b),
+            }));
+        }
+    }
 
     let sink = pw.outputs.iter().find(|d| d.is_default);
     let source = pw.inputs.iter().find(|d| d.is_default);
@@ -230,6 +269,34 @@ pub fn toggle_denoise(currently_active: bool) {
 
 // ---- Deep view ----
 
+// A bluetooth device stays listed in both tabs even when its active profile
+// has no node in that direction (a2dp has no mic; "off" has nothing) — hiding
+// it made "connected buds, silent default mic" undiagnosable from the UI.
+fn devices_for<'a>(data: &'a Value, dir_key: &str) -> Vec<&'a Value> {
+    data.get("devices")
+        .and_then(|v| v.as_array())
+        .map(|all| {
+            all.iter()
+                .filter(|d| {
+                    let has_dir = d.get(dir_key).map(|v| !v.is_null()).unwrap_or(false);
+                    let is_bt = d.get("bt").map(|v| !v.is_null()).unwrap_or(false);
+                    has_dir || is_bt
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn profile_tag(profile: &str) -> &'static str {
+    if profile.starts_with("a2dp") {
+        "a2dp"
+    } else if profile.starts_with("headset") || profile.starts_with("hsp") || profile.starts_with("hfp") {
+        "hfp"
+    } else {
+        "off"
+    }
+}
+
 #[derive(Copy, Clone, PartialEq)]
 enum Tab {
     Speakers = 0,
@@ -295,15 +362,7 @@ impl AudioDeep {
     }
 
     fn tab_devices<'a>(&self, data: &'a Value) -> Vec<&'a Value> {
-        let key = self.tab.dir_key();
-        data.get("devices")
-            .and_then(|v| v.as_array())
-            .map(|all| {
-                all.iter()
-                    .filter(|d| d.get(key).map(|v| !v.is_null()).unwrap_or(false))
-                    .collect()
-            })
-            .unwrap_or_default()
+        devices_for(data, self.tab.dir_key())
     }
 
     fn selected_id(&self, data: &Value) -> Option<u32> {
@@ -356,12 +415,36 @@ impl InteractiveModule for AudioDeep {
             .map(|(i, dev)| {
                 let name = dev.get("name").and_then(|v| v.as_str()).unwrap_or("?");
                 let dir = dev.get(key).unwrap_or(&Value::Null);
+                let bt_profile = dev.pointer("/bt/profile").and_then(|v| v.as_str());
+
+                if dir.is_null() {
+                    // Bluetooth device whose profile has no node this direction
+                    let tag = bt_profile.map(profile_tag).unwrap_or("off");
+                    let missing = match self.tab {
+                        Tab::Speakers => "no output",
+                        Tab::Microphones => "no mic",
+                    };
+                    let row_fg = if i == cursor { fg } else { idle_fg };
+                    return vec![
+                        Elem::text(format!("{} {name} {missing} [{tag}]", self.icon_for(false, true)))
+                            .fg(row_fg),
+                    ];
+                }
+
                 let muted = dir.get("muted").and_then(|v| v.as_bool()).unwrap_or(false);
                 let vol = dir.get("volume").and_then(|v| v.as_i64()).unwrap_or(0);
                 let is_default = dir.get("default").and_then(|v| v.as_bool()).unwrap_or(false);
 
                 let icon = self.icon_for(is_default, muted);
-                let vol_str = if muted { "muted".to_string() } else { format!("{vol}%") };
+                let errored = dir.get("error").and_then(|v| v.as_bool()).unwrap_or(false);
+                let vol_str = if errored {
+                    "error".to_string()
+                } else if muted {
+                    "muted".to_string()
+                } else {
+                    format!("{vol}%")
+                };
+                let tag = bt_profile.map(|p| format!(" [{}]", profile_tag(p))).unwrap_or_default();
 
                 let row_fg = if i == cursor {
                     fg
@@ -371,7 +454,7 @@ impl InteractiveModule for AudioDeep {
                     idle_fg
                 };
 
-                vec![Elem::text(format!("{icon} {name} {vol_str}")).fg(row_fg)]
+                vec![Elem::text(format!("{icon} {name} {vol_str}{tag}")).fg(row_fg)]
             })
             .collect()
     }
@@ -395,6 +478,7 @@ impl InteractiveModule for AudioDeep {
             KeyHintDef { key: "⏎".into(), action: String::new(), label: self.tab.default_action_label().into(), icon: None },
             KeyHintDef { key: "↑↓".into(), action: String::new(), label: "vol".into(), icon: None },
             KeyHintDef { key: "m".into(), action: String::new(), label: "mute".into(), icon: None },
+            KeyHintDef { key: "p".into(), action: String::new(), label: "bt profile".into(), icon: None },
         ];
         if self.tab == Tab::Microphones && find_rnnoise_library().is_some() {
             hints.push(KeyHintDef {
@@ -451,6 +535,24 @@ impl InteractiveModule for AudioDeep {
                 BarApp::spawn_command(&format!("wpctl set-mute {} toggle", self.tab.wpctl_default()));
                 KeyResult::Action
             }
+            // Per-tab profile switch: mic tab moves the device to headset
+            // (bidirectional), speakers tab back to a2dp (hi-fi).
+            _ if event.utf8.as_deref() == Some("p") => {
+                let devs = self.tab_devices(data);
+                let bt = devs.get(self.cursor_idx()).and_then(|d| d.get("bt")).filter(|v| !v.is_null());
+                if let Some(bt) = bt {
+                    let target_key = match self.tab {
+                        Tab::Speakers => "a2dp",
+                        Tab::Microphones => "hfp",
+                    };
+                    let id = bt.get("id").and_then(|v| v.as_u64());
+                    let target = bt.get(target_key).and_then(|v| v.as_u64());
+                    if let (Some(id), Some(target)) = (id, target) {
+                        BarApp::spawn_command(&format!("wpctl set-profile {id} {target}"));
+                    }
+                }
+                KeyResult::Action
+            }
             _ if self.tab == Tab::Microphones && event.utf8.as_deref() == Some("n") => {
                 let active = data.get("denoise").and_then(|v| v.as_bool()).unwrap_or(false);
                 toggle_denoise(active);
@@ -463,22 +565,17 @@ impl InteractiveModule for AudioDeep {
 
     fn activate(&mut self, data: &Value, _sub_path: &[String]) {
         for (idx, key) in [(0usize, "out"), (1, "in")] {
-            if let Some(devs) = data.get("devices").and_then(|v| v.as_array()) {
-                let filtered: Vec<&Value> = devs
-                    .iter()
-                    .filter(|d| d.get(key).map(|v| !v.is_null()).unwrap_or(false))
-                    .collect();
-                let pos = filtered
-                    .iter()
-                    .position(|d| {
-                        d.get(key)
-                            .and_then(|v| v.get("default"))
-                            .and_then(|v| v.as_bool())
-                            .unwrap_or(false)
-                    })
-                    .unwrap_or(0);
-                self.cursors[idx] = pos;
-            }
+            let filtered = devices_for(data, key);
+            let pos = filtered
+                .iter()
+                .position(|d| {
+                    d.get(key)
+                        .and_then(|v| v.get("default"))
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false)
+                })
+                .unwrap_or(0);
+            self.cursors[idx] = pos;
         }
     }
 
