@@ -13,7 +13,7 @@ template = "screenshots"
 
 [[actions]]
 name = "snip"
-run = "bash -c 'dir=${XDG_SCREENSHOTS_DIR:-$(xdg-user-dir PICTURES)/snips} && mkdir -p \"$dir\" && out=\"$dir/$(date +%Y-%m-%dT%H-%M-%S).png\" && wayfreeze --after-freeze-cmd \"slurp | grim -g - - | tee \\\"$out\\\" | wl-copy -t image/png\"'"
+run = "bash -c 'dir=${XDG_SCREENSHOTS_DIR:-$(xdg-user-dir PICTURES)/snips} && mkdir -p \"$dir\" && out=\"$dir/$(date +%Y-%m-%dT%H-%M-%S).png\" && wayfreeze --after-freeze-cmd \"slurp | grim -g - - | tee \\\"$out\\\" | wl-copy -t image/png; killall wayfreeze\"'"
 key = "s"
 label = "snip region (frozen)"
 icon = "selection"
