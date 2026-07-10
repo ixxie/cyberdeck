@@ -42,6 +42,13 @@ trait Device1 {
     #[zbus(property, name = "UUIDs")]
     fn uuids(&self) -> zbus::Result<Vec<String>>;
 
+    #[zbus(property)]
+    fn paired(&self) -> zbus::Result<bool>;
+
+    #[zbus(property)]
+    fn set_trusted(&self, value: bool) -> zbus::Result<()>;
+
+    fn pair(&self) -> zbus::Result<()>;
     fn connect(&self) -> zbus::Result<()>;
     fn disconnect(&self) -> zbus::Result<()>;
 }
@@ -265,6 +272,16 @@ fn connect_device(path: String) {
             .path(path.as_str())?
             .build()
             .await?;
+        // Bare Connect on an unpaired device never bonds: it works while the
+        // device sits in pairing mode but persists nothing, forcing a re-pair
+        // every session. Pair stores the link key; Trusted lets the device
+        // reconnect on its own without an authorization agent.
+        if !dev.paired().await.unwrap_or(false) {
+            dev.pair().await?;
+        }
+        if let Err(e) = dev.set_trusted(true).await {
+            log::warn!("bluetooth: set trusted failed: {e}");
+        }
         dev.connect().await
     }));
 }
