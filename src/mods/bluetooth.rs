@@ -284,7 +284,12 @@ fn start_discovery() {
             .path("/org/bluez/hci0")?
             .build()
             .await?;
-        adapter.start_discovery().await
+        adapter.start_discovery().await?;
+        // BlueZ ties the discovery session to this D-Bus connection and kills
+        // it the moment the connection drops, so hold it open for the scan
+        // window before stopping cleanly.
+        async_io::Timer::after(std::time::Duration::from_secs(60)).await;
+        adapter.stop_discovery().await
     }));
 }
 
