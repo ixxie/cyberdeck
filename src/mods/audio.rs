@@ -22,11 +22,9 @@ pub fn subscribe(
 ) {
     let mut last = String::new();
     loop {
-        let snap = format!(
-            "{}|{}",
-            wpctl_state("@DEFAULT_AUDIO_SINK@"),
-            wpctl_state("@DEFAULT_AUDIO_SOURCE@"),
-        );
+        // Full status covers device add/remove, default changes and volumes —
+        // polling only the defaults missed devices appearing or vanishing.
+        let snap = wpctl_status();
         if snap != last {
             last = snap;
             pipewire::invalidate();
@@ -39,9 +37,9 @@ pub fn subscribe(
     }
 }
 
-fn wpctl_state(target: &str) -> String {
+fn wpctl_status() -> String {
     Command::new("wpctl")
-        .args(["get-volume", target])
+        .arg("status")
         .output()
         .ok()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
