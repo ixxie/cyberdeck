@@ -18,6 +18,7 @@ mod render;
 mod source;
 mod template;
 mod view;
+mod watchdog;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -69,6 +70,7 @@ fn main() {
         .expect("failed to insert Wayland source");
 
     ipc::register_listener(&loop_handle);
+    watchdog::spawn();
 
     let mut app = bar::BarApp::new(config, &globals, &qh, &loop_handle, gpu_state);
 

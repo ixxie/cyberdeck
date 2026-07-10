@@ -39,6 +39,9 @@ trait Device1 {
     #[zbus(property)]
     fn connected(&self) -> zbus::Result<bool>;
 
+    #[zbus(property, name = "UUIDs")]
+    fn uuids(&self) -> zbus::Result<Vec<String>>;
+
     fn connect(&self) -> zbus::Result<()>;
     fn disconnect(&self) -> zbus::Result<()>;
 }
@@ -322,6 +325,39 @@ fn disconnect_all() {
         }
         Ok(())
     }));
+}
+
+/// Blocking disconnect → settle → connect cycle on a device path. Used by the
+/// audio watchdog to recover a wedged bluetooth audio transport.
+pub fn cycle_connection(path: &str) -> zbus::Result<()> {
+    async_io::block_on(async {
+        let conn = zbus::Connection::system().await?;
+        let dev = Device1Proxy::builder(&conn).path(path)?.build().await?;
+        // Tolerate NotConnected here — recovering the connect side still
+        // matters if the device dropped between detection and action.
+        let _ = dev.disconnect().await;
+        async_io::Timer::after(std::time::Duration::from_secs(2)).await;
+        if dev.connect().await.is_ok() {
+            return Ok(());
+        }
+        // Earbuds (e.g. WF-1000XM4) may reject the first host-initiated
+        // connect right after a disconnect; one more try is cheap.
+        async_io::Timer::after(std::time::Duration::from_secs(3)).await;
+        dev.connect().await
+    })
+}
+
+/// Service UUIDs a device advertises, per BlueZ. Empty on any D-Bus failure.
+pub fn device_uuids(path: &str) -> Vec<String> {
+    async_io::block_on(async {
+        let uuids: zbus::Result<Vec<String>> = async {
+            let conn = zbus::Connection::system().await?;
+            let dev = Device1Proxy::builder(&conn).path(path)?.build().await?;
+            dev.uuids().await
+        }
+        .await;
+        uuids.unwrap_or_default()
+    })
 }
 
 /// Look up a device path by MAC address (case-insensitive). Synchronous wrapper
