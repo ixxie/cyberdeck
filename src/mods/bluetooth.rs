@@ -81,6 +81,81 @@ trait ObjectManager {
     ) -> zbus::Result<()>;
 }
 
+#[zbus::proxy(
+    interface = "org.bluez.AgentManager1",
+    default_service = "org.bluez",
+    default_path = "/org/bluez"
+)]
+trait AgentManager1 {
+    fn register_agent(
+        &self,
+        agent: &zbus::zvariant::ObjectPath<'_>,
+        capability: &str,
+    ) -> zbus::Result<()>;
+    fn request_default_agent(
+        &self,
+        agent: &zbus::zvariant::ObjectPath<'_>,
+    ) -> zbus::Result<()>;
+}
+
+// -- Pairing agent --
+//
+// BlueZ only marks the adapter bondable while a pairing agent is registered.
+// Without one, pairing completes with "no bonding" auth requirements, the
+// kernel flags the link key session-only and never stores it — the device
+// then needs a fresh pair every session. NoInputNoOutput capability means
+// JustWorks: BlueZ never asks for pins or confirmation, so the interactive
+// methods only need to exist. Empty replies mean "accept".
+
+struct Agent;
+
+#[zbus::interface(name = "org.bluez.Agent1")]
+impl Agent {
+    fn release(&self) {}
+    fn cancel(&self) {}
+
+    fn request_authorization(&self, _device: zbus::zvariant::OwnedObjectPath) {}
+
+    fn authorize_service(&self, _device: zbus::zvariant::OwnedObjectPath, _uuid: String) {}
+
+    fn request_confirmation(&self, _device: zbus::zvariant::OwnedObjectPath, _passkey: u32) {}
+
+    fn display_pin_code(&self, _device: zbus::zvariant::OwnedObjectPath, _pincode: String) {}
+
+    fn display_passkey(
+        &self,
+        _device: zbus::zvariant::OwnedObjectPath,
+        _passkey: u32,
+        _entered: u16,
+    ) {
+    }
+
+    fn request_pin_code(
+        &self,
+        _device: zbus::zvariant::OwnedObjectPath,
+    ) -> zbus::fdo::Result<String> {
+        Err(zbus::fdo::Error::NotSupported("no input available".into()))
+    }
+
+    fn request_passkey(
+        &self,
+        _device: zbus::zvariant::OwnedObjectPath,
+    ) -> zbus::fdo::Result<u32> {
+        Err(zbus::fdo::Error::NotSupported("no input available".into()))
+    }
+}
+
+const AGENT_PATH: &str = "/org/cyberdeck/agent";
+
+async fn register_agent(conn: &zbus::Connection) -> zbus::Result<()> {
+    conn.object_server().at(AGENT_PATH, Agent).await?;
+    let mgr = AgentManager1Proxy::new(conn).await?;
+    let path = zbus::zvariant::ObjectPath::try_from(AGENT_PATH)?;
+    mgr.register_agent(&path, "NoInputNoOutput").await?;
+    mgr.request_default_agent(&path).await?;
+    Ok(())
+}
+
 // -- Snapshot --
 
 fn empty() -> Value {
@@ -177,6 +252,11 @@ pub fn subscribe(
                 return;
             }
         };
+
+        // Keeps the adapter bondable for the lifetime of this connection
+        if let Err(e) = register_agent(&conn).await {
+            log::warn!("bluetooth: agent registration failed, pairings won't persist: {e}");
+        }
 
         // Initial snapshot
         let val = snapshot(&conn).await;
