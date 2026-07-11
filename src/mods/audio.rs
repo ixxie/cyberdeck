@@ -374,6 +374,14 @@ impl AudioDeep {
             .map(|v| v as u32)
     }
 
+    /// Volume keys act on the device under the cursor, falling back to the
+    /// tab's default device when nothing is selected.
+    fn volume_target(&self, data: &Value) -> String {
+        self.selected_id(data)
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| self.tab.wpctl_default().to_string())
+    }
+
     fn icon_for(&self, default: bool, muted: bool) -> &str {
         match self.tab {
             Tab::Speakers => {
@@ -518,11 +526,11 @@ impl InteractiveModule for AudioDeep {
                 KeyResult::Handled
             }
             Keysym::Up => {
-                BarApp::spawn_command(&format!("wpctl set-volume {} 5%+", self.tab.wpctl_default()));
+                BarApp::spawn_command(&format!("wpctl set-volume {} 5%+", self.volume_target(data)));
                 KeyResult::Action
             }
             Keysym::Down => {
-                BarApp::spawn_command(&format!("wpctl set-volume {} 5%-", self.tab.wpctl_default()));
+                BarApp::spawn_command(&format!("wpctl set-volume {} 5%-", self.volume_target(data)));
                 KeyResult::Action
             }
             Keysym::Return => {
