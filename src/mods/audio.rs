@@ -6,7 +6,6 @@ use serde_json::{json, Value};
 use smithay_client_toolkit::reexports::calloop::channel::Sender;
 use smithay_client_toolkit::seat::keyboard::{KeyEvent, Keysym};
 
-use crate::bar::BarApp;
 use crate::color::Rgba;
 use crate::config::KeyHintDef;
 use crate::layout::Elem;
@@ -20,30 +19,33 @@ pub fn subscribe(
     sender: Sender<(String, Value)>,
     id: String,
 ) {
-    let mut last = String::new();
+    let mut seen = 0u64;
     loop {
-        // Full status covers device add/remove, default changes and volumes —
-        // polling only the defaults missed devices appearing or vanishing.
-        let snap = wpctl_status();
-        if snap != last {
-            last = snap;
-            pipewire::invalidate();
-            let val = poll(&params);
-            if sender.send((id.clone(), val)).is_err() {
-                return;
-            }
+        let gen = pipewire::wait_generation(seen, std::time::Duration::from_secs(60));
+        if gen == seen {
+            continue;
         }
-        std::thread::sleep(std::time::Duration::from_millis(200));
+        // Graph events arrive in bursts (a profile switch re-emits every
+        // param); let one settle so a burst renders once, not ten times.
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        seen = pipewire::generation();
+        let val = poll(&params);
+        if sender.send((id.clone(), val)).is_err() {
+            return;
+        }
     }
 }
 
-fn wpctl_status() -> String {
-    Command::new("wpctl")
-        .arg("status")
-        .output()
-        .ok()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_default()
+/// Run a blocking audio switch off the UI thread; the outcome — success or
+/// the exact failing stage — lands as a toast either way.
+fn notify_result(op: impl FnOnce() -> Result<String, String> + Send + 'static) {
+    std::thread::spawn(move || {
+        let msg = match op() {
+            Ok(m) => m,
+            Err(e) => e,
+        };
+        crate::ipc::notify_bar("audio", &msg);
+    });
 }
 
 fn profile_index(dev: &pipewire::BtDevice, preferred: &str, prefix: &str) -> Option<u32> {
@@ -310,12 +312,6 @@ impl Tab {
             Tab::Microphones => "in",
         }
     }
-    fn wpctl_default(self) -> &'static str {
-        match self {
-            Tab::Speakers => "@DEFAULT_AUDIO_SINK@",
-            Tab::Microphones => "@DEFAULT_AUDIO_SOURCE@",
-        }
-    }
     fn empty_label(self) -> &'static str {
         match self {
             Tab::Speakers => "no speakers",
@@ -376,10 +372,36 @@ impl AudioDeep {
 
     /// Volume keys act on the device under the cursor, falling back to the
     /// tab's default device when nothing is selected.
-    fn volume_target(&self, data: &Value) -> String {
-        self.selected_id(data)
-            .map(|id| id.to_string())
-            .unwrap_or_else(|| self.tab.wpctl_default().to_string())
+    fn volume_target(&self, data: &Value) -> pipewire::VolTarget {
+        match self.selected_id(data) {
+            Some(id) => pipewire::VolTarget::Node(id),
+            None => self.default_vol_target(),
+        }
+    }
+
+    fn default_vol_target(&self) -> pipewire::VolTarget {
+        match self.tab {
+            Tab::Speakers => pipewire::VolTarget::DefaultSink,
+            Tab::Microphones => pipewire::VolTarget::DefaultSource,
+        }
+    }
+
+    /// Selection target under the cursor: the node when the active profile
+    /// exposes one, else the bluetooth device itself — selecting a mic on an
+    /// a2dp-profiled headset is exactly the case the orchestrator exists for.
+    fn selected_target(&self, data: &Value) -> Option<pipewire::Target> {
+        let devs = self.tab_devices(data);
+        let dev = devs.get(self.cursor_idx())?;
+        if let Some(id) = dev
+            .get(self.tab.dir_key())
+            .and_then(|d| d.get("id"))
+            .and_then(|v| v.as_u64())
+        {
+            return Some(pipewire::Target::Node(id as u32));
+        }
+        dev.pointer("/bt/id")
+            .and_then(|v| v.as_u64())
+            .map(|id| pipewire::Target::BtDev(id as u32))
     }
 
     fn icon_for(&self, default: bool, muted: bool) -> &str {
@@ -526,38 +548,44 @@ impl InteractiveModule for AudioDeep {
                 KeyResult::Handled
             }
             Keysym::Up => {
-                BarApp::spawn_command(&format!("wpctl set-volume {} 5%+", self.volume_target(data)));
+                pipewire::volume_step(self.volume_target(data), 5);
                 KeyResult::Action
             }
             Keysym::Down => {
-                BarApp::spawn_command(&format!("wpctl set-volume {} 5%-", self.volume_target(data)));
+                pipewire::volume_step(self.volume_target(data), -5);
                 KeyResult::Action
             }
             Keysym::Return => {
-                if let Some(id) = self.selected_id(data) {
-                    BarApp::spawn_command(&format!("wpctl set-default {id}"));
+                if let Some(target) = self.selected_target(data) {
+                    let sink = self.tab == Tab::Speakers;
+                    notify_result(move || {
+                        if sink {
+                            pipewire::select_speaker(target)
+                        } else {
+                            pipewire::select_mic(target)
+                        }
+                    });
                 }
                 KeyResult::Action
             }
             _ if event.utf8.as_deref() == Some("m") => {
-                BarApp::spawn_command(&format!("wpctl set-mute {} toggle", self.tab.wpctl_default()));
+                pipewire::toggle_mute(self.default_vol_target());
                 KeyResult::Action
             }
             // Per-tab profile switch: mic tab moves the device to headset
             // (bidirectional), speakers tab back to a2dp (hi-fi).
             _ if event.utf8.as_deref() == Some("p") => {
                 let devs = self.tab_devices(data);
-                let bt = devs.get(self.cursor_idx()).and_then(|d| d.get("bt")).filter(|v| !v.is_null());
-                if let Some(bt) = bt {
-                    let target_key = match self.tab {
-                        Tab::Speakers => "a2dp",
-                        Tab::Microphones => "hfp",
+                let bt_id = devs
+                    .get(self.cursor_idx())
+                    .and_then(|d| d.pointer("/bt/id"))
+                    .and_then(|v| v.as_u64());
+                if let Some(id) = bt_id {
+                    let kind = match self.tab {
+                        Tab::Speakers => pipewire::ProfileKind::A2dp,
+                        Tab::Microphones => pipewire::ProfileKind::Hfp,
                     };
-                    let id = bt.get("id").and_then(|v| v.as_u64());
-                    let target = bt.get(target_key).and_then(|v| v.as_u64());
-                    if let (Some(id), Some(target)) = (id, target) {
-                        BarApp::spawn_command(&format!("wpctl set-profile {id} {target}"));
-                    }
+                    notify_result(move || pipewire::switch_profile(id as u32, kind));
                 }
                 KeyResult::Action
             }

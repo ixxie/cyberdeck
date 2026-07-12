@@ -70,6 +70,7 @@ fn main() {
         .expect("failed to insert Wayland source");
 
     ipc::register_listener(&loop_handle);
+    pipewire::start();
     watchdog::spawn();
 
     let mut app = bar::BarApp::new(config, &globals, &qh, &loop_handle, gpu_state);

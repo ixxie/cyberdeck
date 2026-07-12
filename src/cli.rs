@@ -17,6 +17,7 @@ pub enum Cmd {
     Dismiss,
     State,
     Theme(String),
+    Pw(Vec<String>),
     Module(Vec<String>),
 }
 
@@ -34,6 +35,9 @@ pub fn build_cli() -> Command {
         .subcommand(Command::new("theme").about("Set bar theme at runtime")
             .arg(Arg::new("name").required(true)
                 .help("classic, floating, pills, or transparent")))
+        .subcommand(Command::new("pw")
+            .about("Audio backend debug: status | select-mic <name> | select-speaker <name> | profile <a2dp|hfp> <name>")
+            .arg(Arg::new("args").num_args(..).trailing_var_arg(true)))
         .subcommand(Command::new("workspace").about("Workspace commands (alias for workspaces)")
             .subcommand(Command::new("overview").about("overview"))
             .subcommand(Command::new("rename").about("rename"))
@@ -85,6 +89,13 @@ pub fn parse() -> Cli {
             let name = sub.get_one::<String>("name").cloned().unwrap_or_default();
             Some(Cmd::Theme(name))
         }
+        Some(("pw", sub)) => {
+            let args = sub
+                .get_many::<String>("args")
+                .map(|v| v.cloned().collect())
+                .unwrap_or_default();
+            Some(Cmd::Pw(args))
+        }
         Some((name, sub)) => {
             // Resolve singular aliases to module names
             let module_name = match name {
@@ -116,7 +127,107 @@ pub fn run_cmd(cmd: Cmd, json: bool) {
         Cmd::Dismiss => ipc::send_request(&IpcRequest::Dismiss, json),
         Cmd::State => ipc::send_request(&IpcRequest::State, json),
         Cmd::Theme(name) => ipc::send_request(&IpcRequest::SetTheme { theme: name }, json),
+        Cmd::Pw(args) => run_pw_cmd(&args),
         Cmd::Module(args) => run_module_cmd(&args, json),
+    }
+}
+
+// Talks to PipeWire directly (not the running bar) — a standalone harness for
+// the audio backend, usable even when the daemon is down or suspect.
+fn run_pw_cmd(args: &[String]) {
+    use crate::pipewire::{self, ProfileKind, Target};
+
+    pipewire::start();
+    if !pipewire::wait_ready(std::time::Duration::from_secs(3)) {
+        eprintln!("timed out waiting for the pipewire graph");
+        std::process::exit(1);
+    }
+    pipewire::wait_settled(
+        std::time::Duration::from_millis(300),
+        std::time::Duration::from_secs(3),
+    );
+    let state = pipewire::query();
+
+    let find = |sink: bool, needle: &str| -> Option<Target> {
+        let needle = needle.to_lowercase();
+        let list = if sink { &state.outputs } else { &state.inputs };
+        list.iter()
+            .find(|n| n.name.to_lowercase().contains(&needle))
+            .map(|n| Target::Node(n.id))
+            .or_else(|| {
+                state
+                    .bt
+                    .iter()
+                    .find(|b| b.name.to_lowercase().contains(&needle))
+                    .map(|b| Target::BtDev(b.device_id))
+            })
+    };
+
+    let report = |res: Result<String, String>| match res {
+        Ok(msg) => println!("{msg}"),
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    };
+
+    match args.first().map(String::as_str) {
+        None | Some("status") => {
+            println!("sinks:");
+            for n in &state.outputs {
+                let def = if n.is_default { "*" } else { " " };
+                println!("  {def} {:>3}  {}  vol {}% {} [{}]", n.id, n.name, n.volume,
+                    if n.muted { "muted" } else { "" }, n.state);
+            }
+            println!("sources:");
+            for n in &state.inputs {
+                let def = if n.is_default { "*" } else { " " };
+                println!("  {def} {:>3}  {}  vol {}% {} [{}]", n.id, n.name, n.volume,
+                    if n.muted { "muted" } else { "" }, n.state);
+            }
+            println!("bluetooth:");
+            for b in &state.bt {
+                println!("    {:>3}  {}  {}  profile {}", b.device_id, b.name,
+                    if b.connected { "connected" } else { "disconnected" }, b.profile);
+                for p in &b.profiles {
+                    println!("           {} {} {}", p.index, p.name,
+                        if p.available { "" } else { "(unavailable)" });
+                }
+            }
+        }
+        Some(cmd @ ("select-mic" | "select-speaker")) => {
+            let sink = cmd == "select-speaker";
+            let needle = args[1..].join(" ");
+            let Some(target) = find(sink, &needle) else {
+                eprintln!("no device matching '{needle}'");
+                std::process::exit(1);
+            };
+            report(if sink {
+                pipewire::select_speaker(target)
+            } else {
+                pipewire::select_mic(target)
+            });
+        }
+        Some("profile") => {
+            let kind = match args.get(1).map(String::as_str) {
+                Some("a2dp") => ProfileKind::A2dp,
+                Some("hfp") => ProfileKind::Hfp,
+                _ => {
+                    eprintln!("usage: cyberdeck pw profile <a2dp|hfp> <device name>");
+                    std::process::exit(2);
+                }
+            };
+            let needle = args[2..].join(" ").to_lowercase();
+            let Some(bt) = state.bt.iter().find(|b| b.name.to_lowercase().contains(&needle)) else {
+                eprintln!("no bluetooth device matching '{needle}'");
+                std::process::exit(1);
+            };
+            report(pipewire::switch_profile(bt.device_id, kind));
+        }
+        Some(other) => {
+            eprintln!("unknown pw command '{other}' — try status, select-mic, select-speaker, profile");
+            std::process::exit(2);
+        }
     }
 }
 

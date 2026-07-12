@@ -424,6 +424,18 @@ fn disconnect_all() {
     }));
 }
 
+/// Idempotent connect on a device path. BlueZ establishes any profiles that
+/// are missing on an already-connected device — the remedy for "connected but
+/// the Handsfree service never came up", which leaves PipeWire without a
+/// headset profile to offer.
+pub fn ensure_connected(path: &str) -> zbus::Result<()> {
+    async_io::block_on(async {
+        let conn = zbus::Connection::system().await?;
+        let dev = Device1Proxy::builder(&conn).path(path)?.build().await?;
+        dev.connect().await
+    })
+}
+
 /// Blocking disconnect → settle → connect cycle on a device path. Used by the
 /// audio watchdog to recover a wedged bluetooth audio transport.
 pub fn cycle_connection(path: &str) -> zbus::Result<()> {

@@ -24,6 +24,7 @@
 
         nativeBuildInputs = with pkgs; [
           pkg-config
+          rustPlatform.bindgenHook
         ];
 
         buildInputs = with pkgs; [
@@ -33,6 +34,7 @@
           freetype
           vulkan-loader
           libGL
+          pipewire
         ];
 
         extraFilter = path: _type:
