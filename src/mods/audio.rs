@@ -48,43 +48,49 @@ fn notify_result(op: impl FnOnce() -> Result<String, String> + Send + 'static) {
     });
 }
 
-fn profile_index(dev: &pipewire::BtDevice, preferred: &str, prefix: &str) -> Option<u32> {
-    dev.profiles
-        .iter()
-        .find(|p| p.name == preferred)
-        .or_else(|| dev.profiles.iter().find(|p| p.name.starts_with(prefix)))
-        .map(|p| p.index)
-}
-
 fn bt_json(dev: &pipewire::BtDevice) -> Value {
     json!({
         "id": dev.device_id,
         "profile": dev.profile,
-        "a2dp": profile_index(dev, "a2dp-sink", "a2dp-sink"),
-        "hfp": profile_index(dev, "headset-head-unit", "headset"),
     })
 }
 
 pub fn poll(_params: &serde_json::Map<String, Value>) -> Value {
     let pw = pipewire::query();
 
+    // The façade's virtual nodes stand in for the device; hide the raw
+    // bluez nodes so the device shows as exactly one row.
+    let facade_dev = pw.facade.as_ref().map(|(id, _)| *id);
+    let facade_mac = pw.facade.as_ref().map(|(_, mac)| mac.as_str());
+    let hidden = |d: &pipewire::PwDevice| d.facade.is_none() && d.device_id.is_some() && d.device_id == facade_dev;
+
     // Group sinks + sources by description so a headset (one physical device,
     // both directions) renders as a single device with two role-keyed slots.
     let mut by_name: BTreeMap<String, (Option<&pipewire::PwDevice>, Option<&pipewire::PwDevice>)> =
         BTreeMap::new();
     for d in &pw.outputs {
-        by_name.entry(d.name.clone()).or_default().0 = Some(d);
+        if !hidden(d) {
+            by_name.entry(d.name.clone()).or_default().0 = Some(d);
+        }
     }
     for d in &pw.inputs {
-        by_name.entry(d.name.clone()).or_default().1 = Some(d);
+        if !hidden(d) {
+            by_name.entry(d.name.clone()).or_default().1 = Some(d);
+        }
     }
 
     let mut devices: Vec<Value> = by_name
         .into_iter()
         .map(|(name, (out, inp))| {
-            let bt = out
+            let node_dev = out
                 .and_then(|d| d.device_id)
-                .or_else(|| inp.and_then(|d| d.device_id))
+                .or_else(|| inp.and_then(|d| d.device_id));
+            let is_facade = out
+                .and_then(|d| d.facade.as_deref())
+                .or_else(|| inp.and_then(|d| d.facade.as_deref()))
+                .is_some_and(|m| Some(m) == facade_mac);
+            let bt = node_dev
+                .or(if is_facade { facade_dev } else { None })
                 .and_then(|id| pw.bt.iter().find(|b| b.device_id == id));
             json!({
                 "name": name,
@@ -111,7 +117,9 @@ pub fn poll(_params: &serde_json::Map<String, Value>) -> Value {
     // "off") would otherwise vanish from the UI while still being connected.
     for b in &pw.bt {
         let covered = pw.outputs.iter().chain(&pw.inputs)
-            .any(|d| d.device_id == Some(b.device_id));
+            .any(|d| d.device_id == Some(b.device_id))
+            || (facade_dev == Some(b.device_id)
+                && pw.outputs.iter().any(|d| d.facade.as_deref() == facade_mac));
         if !covered {
             devices.push(json!({
                 "name": b.name,
@@ -289,13 +297,16 @@ fn devices_for<'a>(data: &'a Value, dir_key: &str) -> Vec<&'a Value> {
         .unwrap_or_default()
 }
 
-fn profile_tag(profile: &str) -> &'static str {
-    if profile.starts_with("a2dp") {
-        "a2dp"
-    } else if profile.starts_with("headset") || profile.starts_with("hsp") || profile.starts_with("hfp") {
-        "hfp"
+/// Profiles are an implementation detail the backend manages; the UI only
+/// flags the states a user can feel — an active call link (reduced audio
+/// quality) or a device whose audio is off entirely.
+fn profile_tag(profile: &str) -> Option<&'static str> {
+    if profile.starts_with("headset") || profile.starts_with("hsp") || profile.starts_with("hfp") {
+        Some("call")
+    } else if profile == "off" {
+        Some("off")
     } else {
-        "off"
+        None
     }
 }
 
@@ -449,14 +460,13 @@ impl InteractiveModule for AudioDeep {
 
                 if dir.is_null() {
                     // Bluetooth device whose profile has no node this direction
-                    let tag = bt_profile.map(profile_tag).unwrap_or("off");
                     let missing = match self.tab {
                         Tab::Speakers => "no output",
                         Tab::Microphones => "no mic",
                     };
                     let row_fg = if i == cursor { fg } else { idle_fg };
                     return vec![
-                        Elem::text(format!("{} {name} {missing} [{tag}]", self.icon_for(false, true)))
+                        Elem::text(format!("{} {name} {missing}", self.icon_for(false, true)))
                             .fg(row_fg),
                     ];
                 }
@@ -474,7 +484,10 @@ impl InteractiveModule for AudioDeep {
                 } else {
                     format!("{vol}%")
                 };
-                let tag = bt_profile.map(|p| format!(" [{}]", profile_tag(p))).unwrap_or_default();
+                let tag = bt_profile
+                    .and_then(profile_tag)
+                    .map(|t| format!(" [{t}]"))
+                    .unwrap_or_default();
 
                 let row_fg = if i == cursor {
                     fg
@@ -508,7 +521,6 @@ impl InteractiveModule for AudioDeep {
             KeyHintDef { key: "⏎".into(), action: String::new(), label: self.tab.default_action_label().into(), icon: None },
             KeyHintDef { key: "↑↓".into(), action: String::new(), label: "vol".into(), icon: None },
             KeyHintDef { key: "m".into(), action: String::new(), label: "mute".into(), icon: None },
-            KeyHintDef { key: "p".into(), action: String::new(), label: "bt profile".into(), icon: None },
         ];
         if self.tab == Tab::Microphones && find_rnnoise_library().is_some() {
             hints.push(KeyHintDef {

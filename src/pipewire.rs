@@ -32,10 +32,13 @@ pub struct PwDevice {
     pub id: u32,
     pub name: String,
     pub node_name: String,
+    pub serial: String,
     pub volume: i64,
     pub muted: bool,
     pub is_default: bool,
     pub device_id: Option<u32>,
+    /// Underscored MAC when this node belongs to a device façade.
+    pub facade: Option<String>,
     pub state: String,
 }
 
@@ -59,10 +62,13 @@ pub struct BtDevice {
 /// A live capture stream — an app pulling audio. Passive streams (filter
 /// chains like rnnoise) and monitor taps don't express mic demand.
 #[derive(Clone, Debug)]
-pub struct CaptureStream {
+pub struct StreamInfo {
+    pub id: u32,
+    pub node_name: String,
     pub target: Option<String>,
     pub passive: bool,
     pub monitor: bool,
+    pub state: String,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -70,7 +76,10 @@ pub struct PwState {
     pub outputs: Vec<PwDevice>,
     pub inputs: Vec<PwDevice>,
     pub bt: Vec<BtDevice>,
-    pub capture: Vec<CaptureStream>,
+    pub capture: Vec<StreamInfo>,
+    pub playback: Vec<StreamInfo>,
+    /// (bluetooth device global id, underscored MAC) of the active façade.
+    pub facade: Option<(u32, String)>,
     pub denoise: bool,
 }
 
@@ -205,10 +214,10 @@ pub fn toggle_mute(target: VolTarget) {
     send(Cmd::Mute { node: node.id, mute: !node.muted });
 }
 
-/// Make `target` the default mic, deterministically. For bluetooth devices
-/// this owns the whole choreography: restore a missing headset profile via a
-/// BlueZ connect, switch the profile, wait for the source node, then move the
-/// default. Every failure names its stage.
+/// Make `target` the default mic. For bluetooth devices this routes through
+/// the device façade: the default becomes the persistent virtual mic, and the
+/// demand policy engages the headset profile only while something actually
+/// captures. No profile churn at selection time.
 pub fn select_mic(target: Target) -> Result<String, String> {
     let _guard = switch_guard()?;
     let state = query();
@@ -240,25 +249,14 @@ pub fn select_mic(target: Target) -> Result<String, String> {
             .clone(),
     };
 
-    engage_profile(&bt, ProfileKind::Hfp)?;
-    let node = wait_for(Duration::from_secs(6), |s| {
-        s.inputs
-            .iter()
-            .find(|n| n.device_id == Some(bt.device_id) && n.state != "error")
-            .map(|n| n.id)
+    let f = ensure_facade(&bt)?;
+    let mic = wait_for(Duration::from_secs(5), |s| {
+        s.inputs.iter().find(|n| n.node_name == f.mic_name()).map(|n| n.id)
     })
-    .map_err(|_| format!("{}: headset profile engaged but no mic appeared — transport failed", bt.name))?;
-    set_default_and_wait(false, node)?;
-    let source_node = query()
-        .inputs
-        .iter()
-        .find(|n| n.id == node)
-        .map(|n| n.node_name.clone())
-        .unwrap_or_default();
-    set_preferred(Some(Preferred { device_id: bt.device_id, source_node }));
+    .map_err(|_| format!("{}: façade mic did not appear", bt.name))?;
+    set_default_and_wait(false, mic)?;
+    set_preferred(Some(Preferred { device_id: bt.device_id, source_node: f.mic_name() }));
 
-    // The previous default mic's device no longer serves capture; give its
-    // audio quality back (headset profile is telephone-grade for playback).
     if let Some(prev) = prev_bt {
         if prev.device_id != bt.device_id {
             restore_a2dp(prev.device_id);
@@ -267,9 +265,9 @@ pub fn select_mic(target: Target) -> Result<String, String> {
     Ok(format!("mic → {}", bt.name))
 }
 
-/// Make `target` the default speaker. Bluetooth devices always move to a2dp
-/// (hi-fi); if their mic is the preferred one, the demand policy re-engages
-/// the headset profile the moment something actually captures.
+/// Make `target` the default speaker. Bluetooth devices route through the
+/// façade sink, which survives profile flips — no profile action here; the
+/// demand policy keeps hi-fi when the mic is idle.
 pub fn select_speaker(target: Target) -> Result<String, String> {
     let _guard = switch_guard()?;
     let state = query();
@@ -293,18 +291,12 @@ pub fn select_speaker(target: Target) -> Result<String, String> {
             .clone(),
     };
 
-    // An explicit hi-fi request wins over live mic demand until the next
-    // fresh demand edge — otherwise the policy would flip straight back.
-    hold_policy_for(bt.device_id);
-    engage_profile(&bt, ProfileKind::A2dp)?;
-    let node = wait_for(Duration::from_secs(6), |s| {
-        s.outputs
-            .iter()
-            .find(|n| n.device_id == Some(bt.device_id) && n.state != "error")
-            .map(|n| n.id)
+    let f = ensure_facade(&bt)?;
+    let sink = wait_for(Duration::from_secs(5), |s| {
+        s.outputs.iter().find(|n| n.node_name == f.sink_name()).map(|n| n.id)
     })
-    .map_err(|_| format!("{}: no output node appeared — transport failed", bt.name))?;
-    set_default_and_wait(true, node)?;
+    .map_err(|_| format!("{}: façade sink did not appear", bt.name))?;
+    set_default_and_wait(true, sink)?;
     Ok(format!("speaker → {}", bt.name))
 }
 
@@ -321,11 +313,213 @@ pub fn switch_profile(device_id: u32, kind: ProfileKind) -> Result<String, Strin
         .clone();
     hold_policy_for(device_id);
     engage_profile(&bt, kind)?;
+    kick_parked(device_id);
     let label = match kind {
         ProfileKind::A2dp => "a2dp",
         ProfileKind::Hfp => "headset",
     };
     Ok(format!("{} → {label}", bt.name))
+}
+
+// ---- Device façade ----
+//
+// Phone-style device abstraction (the Android/CoreAudio move): apps and
+// defaults only ever see a persistent virtual sink/source pair, built from a
+// pipewire loopback child process (same mechanism as the denoise chain).
+// Profile flips replumb the hidden backend streams while the app-facing
+// nodes never die — playback survives and the a2dp/hfp duality disappears
+// from the UI. Backend sides carry node.dont-fallback so audio stalls
+// briefly mid-flip instead of leaking to another device.
+
+#[derive(Clone)]
+struct Facade {
+    device_id: u32,
+    mac: String,
+}
+
+impl Facade {
+    fn sink_name(&self) -> String {
+        format!("deck_sink.{}", self.mac)
+    }
+    fn sink_out_name(&self) -> String {
+        format!("deck_sink_out.{}", self.mac)
+    }
+    fn mic_name(&self) -> String {
+        format!("deck_mic.{}", self.mac)
+    }
+    fn mic_in_name(&self) -> String {
+        format!("deck_mic_in.{}", self.mac)
+    }
+}
+
+static FACADE: Mutex<Option<Facade>> = Mutex::new(None);
+
+fn facade() -> Option<Facade> {
+    FACADE.lock().unwrap().clone()
+}
+
+/// Underscored MAC from a BlueZ object path (`.../dev_14_3F_A6_C5_09_88`).
+fn mac_from_path(path: &str) -> Option<String> {
+    path.rsplit_once("dev_").map(|(_, m)| m.to_string())
+}
+
+fn facade_pid_path() -> std::path::PathBuf {
+    let runtime = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
+    std::path::PathBuf::from(runtime).join("cyberdeck-facade.pid")
+}
+
+fn write_facade_config(mac: &str, desc: &str) -> Option<String> {
+    let cache = std::env::var("XDG_CACHE_HOME").unwrap_or_else(|_| {
+        let home = std::env::var("HOME").unwrap_or_default();
+        format!("{home}/.cache")
+    });
+    let conf_path = std::path::PathBuf::from(cache).join(format!("cyberdeck/facade-{mac}.conf"));
+    let _ = std::fs::create_dir_all(conf_path.parent()?);
+    // module-loopback self-destructs at init when a configured target.object
+    // does not exist yet. The sink backend can carry a static target (the
+    // bluez output node exists in every profile, and ensure_facade only
+    // spawns while the device is connected) plus dont-fallback so flip gaps
+    // stall instead of leaking to another device. The mic backend gets no
+    // target — the headset-profile source only exists on demand — and is
+    // pinned at runtime by the policy instead; wireplumber's link-group
+    // exclusion keeps it from ever looping back onto the façade itself.
+    let config = format!(
+        r#"context.modules = [
+{{  name = libpipewire-module-rt
+    flags = [ ifexists nofail ]
+}}
+{{  name = libpipewire-module-protocol-native }}
+{{  name = libpipewire-module-client-node }}
+{{  name = libpipewire-module-adapter }}
+{{  name = libpipewire-module-loopback
+    args = {{
+        capture.props = {{
+            node.name = "deck_sink.{mac}"
+            node.description = "{desc}"
+            media.class = Audio/Sink
+            audio.rate = 48000
+            audio.position = [ FL FR ]
+            node.latency = "256/48000"
+            deck.facade = "{mac}"
+        }}
+        playback.props = {{
+            node.name = "deck_sink_out.{mac}"
+            node.description = "{desc} link out"
+            target.object = "bluez_output.{mac}.1"
+            node.dont-fallback = true
+            node.passive = true
+            audio.rate = 48000
+            node.latency = "256/48000"
+            deck.facade = "{mac}"
+        }}
+    }}
+}}
+{{  name = libpipewire-module-loopback
+    args = {{
+        capture.props = {{
+            node.name = "deck_mic_in.{mac}"
+            node.description = "{desc} link in"
+            node.passive = true
+            audio.rate = 48000
+            node.latency = "256/48000"
+            deck.facade = "{mac}"
+        }}
+        playback.props = {{
+            node.name = "deck_mic.{mac}"
+            node.description = "{desc}"
+            media.class = Audio/Source
+            audio.rate = 48000
+            node.latency = "256/48000"
+            deck.facade = "{mac}"
+        }}
+    }}
+}}
+]"#
+    );
+    std::fs::write(&conf_path, &config).ok()?;
+    Some(conf_path.to_string_lossy().to_string())
+}
+
+/// Bring up (or adopt) the façade for a bluetooth device. One façade lives at
+/// a time; selecting a different device replaces it.
+fn ensure_facade(bt: &BtDevice) -> Result<Facade, String> {
+    let mac = mac_from_path(&bt.path).ok_or_else(|| format!("{}: no mac in device path", bt.name))?;
+
+    if let Some(f) = facade() {
+        if f.mac == mac {
+            if f.device_id != bt.device_id {
+                *FACADE.lock().unwrap() = Some(Facade { device_id: bt.device_id, mac: mac.clone() });
+            }
+            return Ok(facade().unwrap());
+        }
+        teardown_facade();
+    }
+
+    // A child from a previous daemon run may still serve this device.
+    let nodes_present = query()
+        .outputs
+        .iter()
+        .any(|n| n.facade.as_deref() == Some(mac.as_str()));
+    if !nodes_present {
+        let conf = write_facade_config(&mac, &bt.name).ok_or("failed to write façade config")?;
+        let child = std::process::Command::new("pipewire")
+            .args(["-c", &conf])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(|e| format!("failed to start façade: {e}"))?;
+        let _ = std::fs::write(facade_pid_path(), child.id().to_string());
+        log::info!("audio: façade for {} started (pid {})", bt.name, child.id());
+    }
+
+    let f = Facade { device_id: bt.device_id, mac };
+    *FACADE.lock().unwrap() = Some(f.clone());
+    wait_for(Duration::from_secs(5), |s| {
+        s.outputs.iter().find(|n| n.node_name == f.sink_name()).map(drop)
+    })
+    .map_err(|_| format!("{}: façade nodes did not appear", bt.name))?;
+    Ok(f)
+}
+
+fn teardown_facade() {
+    if let Ok(pid_str) = std::fs::read_to_string(facade_pid_path()) {
+        if let Ok(pid) = pid_str.trim().parse::<i32>() {
+            unsafe {
+                libc::kill(pid, libc::SIGTERM);
+            }
+        }
+    }
+    let _ = std::fs::remove_file(facade_pid_path());
+    *FACADE.lock().unwrap() = None;
+}
+
+/// Keep the façade's hidden backend streams pointed at the device's real
+/// nodes. Pins by node name via metadata; `pinned` dedupes so a stable graph
+/// costs nothing. The sink side usually matches the config's static target;
+/// the mic side is discovered here when the headset profile first engages.
+fn pin_facade_backends(state: &PwState, f: &Facade, pinned: &mut HashMap<u32, String>) {
+    let mut pin = |stream: Option<&StreamInfo>, real: Option<&PwDevice>| {
+        let (Some(st), Some(real)) = (stream, real) else { return };
+        if pinned.get(&st.id) == Some(&real.node_name) {
+            return;
+        }
+        if st.target.as_deref() == Some(real.node_name.as_str()) && !pinned.contains_key(&st.id) {
+            pinned.insert(st.id, real.node_name.clone());
+            return;
+        }
+        log::info!("audio: pinning {} -> {}", st.node_name, real.node_name);
+        send(Cmd::Retarget { stream: st.id, serial: Some(real.node_name.clone()) });
+        pinned.insert(st.id, real.node_name.clone());
+    };
+    pin(
+        state.playback.iter().find(|s| s.node_name == f.sink_out_name()),
+        state.outputs.iter().find(|n| n.device_id == Some(f.device_id)),
+    );
+    pin(
+        state.capture.iter().find(|s| s.node_name == f.mic_in_name()),
+        state.inputs.iter().find(|n| n.device_id == Some(f.device_id)),
+    );
 }
 
 // ---- Demand policy ----
@@ -389,17 +583,63 @@ fn policy_thread() {
     let mut seen = 0u64;
     let mut demand_was = false;
     let mut quiet_since: Option<Instant> = None;
+    let mut facade_gone_since: Option<Instant> = None;
+    let mut pinned: HashMap<u32, String> = HashMap::new();
 
     loop {
         // The timeout doubles as the debounce tick when the graph is quiet.
         seen = wait_generation(seen, Duration::from_secs(2));
+        let state = query();
+
+        // Adopt a façade left behind by a previous daemon run.
+        if facade().is_none() {
+            if let Some(mac) = state.outputs.iter().find_map(|n| n.facade.clone()) {
+                if let Some(bt) = state
+                    .bt
+                    .iter()
+                    .find(|b| mac_from_path(&b.path).as_deref() == Some(mac.as_str()))
+                {
+                    log::info!("audio: adopting façade for {}", bt.name);
+                    *FACADE.lock().unwrap() = Some(Facade { device_id: bt.device_id, mac });
+                }
+            }
+        }
+
+        if let Some(f) = facade() {
+            let device_present = state.bt.iter().any(|b| b.device_id == f.device_id && b.connected);
+            if device_present {
+                facade_gone_since = None;
+                pin_facade_backends(&state, &f, &mut pinned);
+                // Selecting the façade mic in a previous daemon run survives
+                // as the default; rebuild the preferred-mic state from it.
+                if PREFERRED.lock().unwrap().is_none() {
+                    let mic_default = state
+                        .inputs
+                        .iter()
+                        .any(|n| n.node_name == f.mic_name() && n.is_default);
+                    if mic_default {
+                        set_preferred(Some(Preferred {
+                            device_id: f.device_id,
+                            source_node: f.mic_name(),
+                        }));
+                    }
+                }
+            } else {
+                let since = *facade_gone_since.get_or_insert_with(Instant::now);
+                if since.elapsed() >= Duration::from_secs(20) {
+                    log::info!("audio: façade device gone, tearing down");
+                    teardown_facade();
+                    facade_gone_since = None;
+                    pinned.clear();
+                }
+            }
+        }
 
         let Some(pref) = PREFERRED.lock().unwrap().clone() else {
             demand_was = false;
             quiet_since = None;
             continue;
         };
-        let state = query();
         let Some(bt) = state.bt.iter().find(|b| b.device_id == pref.device_id) else {
             continue;
         };
@@ -418,7 +658,10 @@ fn policy_thread() {
             if !POLICY_HOLD.load(Ordering::SeqCst) && !bt.profile.starts_with("headset") {
                 let Ok(_guard) = SWITCHING.try_lock() else { continue };
                 match engage_profile(bt, ProfileKind::Hfp) {
-                    Ok(()) => ipc::notify_bar("audio", &format!("mic engaged: {}", bt.name)),
+                    Ok(()) => {
+                        kick_parked(bt.device_id);
+                        ipc::notify_bar("audio", &format!("mic engaged: {}", bt.name));
+                    }
                     Err(e) => ipc::notify_bar("audio", &e),
                 }
             }
@@ -430,6 +673,7 @@ fn policy_thread() {
                     quiet_since = None;
                     let Ok(_guard) = SWITCHING.try_lock() else { continue };
                     restore_a2dp(bt.device_id);
+                    kick_parked(bt.device_id);
                     ipc::notify_bar("audio", &format!("{}: back to hi-fi (mic idle)", bt.name));
                 }
             } else {
@@ -527,6 +771,62 @@ fn set_default_and_wait(sink: bool, node_id: u32) -> Result<(), String> {
     .map_err(|_| "default did not move — is WirePlumber running?".to_string())
 }
 
+/// A profile switch tears the device's sink node down and recreates it; app
+/// streams that were playing get re-linked by WirePlumber but stay parked in
+/// `suspended` and never resume on their own (and nothing else un-parks
+/// them — macOS and Windows both punt here too). Once the new sink is up and
+/// default, nudge every parked default-following playback stream with a
+/// retarget-then-clear so it resumes, still following the default afterwards.
+fn kick_parked(device_id: u32) {
+    std::thread::spawn(move || {
+        let Ok(sink) = wait_for(Duration::from_secs(6), |s| {
+            s.outputs
+                .iter()
+                .find(|n| n.device_id == Some(device_id) && !n.serial.is_empty())
+                .cloned()
+        }) else {
+            return;
+        };
+        let f = facade().filter(|f| f.device_id == device_id);
+        if !sink.is_default && f.is_none() {
+            return;
+        }
+        // Give WirePlumber a beat to finish its own re-linking pass.
+        std::thread::sleep(Duration::from_millis(400));
+        let state = query();
+        // Default-following app streams, plus the façade's own backend
+        // streams (their conf target survives the clear below).
+        let is_facade_backend = |st: &StreamInfo| {
+            f.as_ref()
+                .map(|f| st.node_name == f.sink_out_name() || st.node_name == f.mic_in_name())
+                .unwrap_or(false)
+        };
+        let parked: Vec<u32> = state
+            .playback
+            .iter()
+            .chain(&state.capture)
+            .filter(|st| {
+                (st.target.is_none() || is_facade_backend(st))
+                    && !st.monitor
+                    && st.state != "running"
+                    && (!st.passive || is_facade_backend(st))
+            })
+            .map(|st| st.id)
+            .collect();
+        if parked.is_empty() {
+            return;
+        }
+        log::info!("audio: kicking {} parked stream(s) onto {}", parked.len(), sink.name);
+        for id in &parked {
+            send(Cmd::Retarget { stream: *id, serial: Some(sink.serial.clone()) });
+        }
+        std::thread::sleep(Duration::from_millis(500));
+        for id in &parked {
+            send(Cmd::Retarget { stream: *id, serial: None });
+        }
+    });
+}
+
 fn restore_a2dp(device_id: u32) {
     let state = query();
     let Some(bt) = state.bt.iter().find(|b| b.device_id == device_id) else {
@@ -542,16 +842,28 @@ fn restore_a2dp(device_id: u32) {
 }
 
 fn resolve_vol_target(state: &PwState, target: VolTarget) -> Option<PwDevice> {
-    match target {
-        VolTarget::Node(id) => state
-            .outputs
-            .iter()
-            .chain(&state.inputs)
-            .find(|n| n.id == id)
-            .cloned(),
-        VolTarget::DefaultSink => state.outputs.iter().find(|n| n.is_default).cloned(),
-        VolTarget::DefaultSource => state.inputs.iter().find(|n| n.is_default).cloned(),
+    let (node, is_sink) = match target {
+        VolTarget::Node(id) => {
+            if let Some(n) = state.outputs.iter().find(|n| n.id == id) {
+                (n.clone(), true)
+            } else {
+                (state.inputs.iter().find(|n| n.id == id)?.clone(), false)
+            }
+        }
+        VolTarget::DefaultSink => (state.outputs.iter().find(|n| n.is_default)?.clone(), true),
+        VolTarget::DefaultSource => (state.inputs.iter().find(|n| n.is_default)?.clone(), false),
+    };
+    // Volume on a façade node writes through to the real device node so the
+    // headset's hardware volume moves, not a software gain on the loopback.
+    if let (Some(mac), Some((dev_id, fmac))) = (&node.facade, &state.facade) {
+        if mac == fmac {
+            let list = if is_sink { &state.outputs } else { &state.inputs };
+            if let Some(real) = list.iter().find(|n| n.device_id == Some(*dev_id)) {
+                return Some(real.clone());
+            }
+        }
     }
+    Some(node)
 }
 
 // ---- Backend plumbing ----
@@ -561,6 +873,7 @@ enum Cmd {
     Default { sink: bool, node_name: String },
     Volume { node: u32, pct: i64 },
     Mute { node: u32, mute: bool },
+    Retarget { stream: u32, serial: Option<String> },
 }
 
 struct Backend {
@@ -627,8 +940,10 @@ fn monitor_thread(mut rx: pw::channel::Receiver<Cmd>) {
 struct NodeEntry {
     name: String,
     node_name: String,
+    serial: String,
     is_sink: bool,
     device_id: Option<u32>,
+    facade: Option<String>,
     state: String,
     volume: i64,
     muted: bool,
@@ -648,9 +963,12 @@ struct DeviceEntry {
 }
 
 struct StreamEntry {
+    output: bool,
+    node_name: String,
     target: Option<String>,
     passive: bool,
     monitor: bool,
+    state: String,
     _proxy: pw::node::Node,
     _listener: pw::node::NodeListener,
 }
@@ -678,10 +996,12 @@ impl Local {
                 id: *id,
                 name: n.name.clone(),
                 node_name: n.node_name.clone(),
+                serial: n.serial.clone(),
                 volume: n.volume,
                 muted: n.muted,
                 is_default,
                 device_id: n.device_id,
+                facade: n.facade.clone(),
                 state: n.state.clone(),
             };
             if n.is_sink {
@@ -705,17 +1025,19 @@ impl Local {
             })
             .collect();
         bt.sort_by_key(|d| d.device_id);
-        let capture = self
-            .streams
-            .values()
-            .map(|s| CaptureStream {
-                target: s.target.clone(),
-                passive: s.passive,
-                monitor: s.monitor,
-            })
-            .collect();
+        let stream_info = |(id, s): (&u32, &StreamEntry)| StreamInfo {
+            id: *id,
+            node_name: s.node_name.clone(),
+            target: s.target.clone(),
+            passive: s.passive,
+            monitor: s.monitor,
+            state: s.state.clone(),
+        };
+        let capture = self.streams.iter().filter(|(_, s)| !s.output).map(stream_info).collect();
+        let playback = self.streams.iter().filter(|(_, s)| s.output).map(stream_info).collect();
         let denoise = self.nodes.values().any(|n| n.node_name == "rnnoise_source");
-        PwState { outputs, inputs, bt, capture, denoise }
+        let facade = facade().map(|f| (f.device_id, f.mac));
+        PwState { outputs, inputs, bt, capture, playback, facade, denoise }
     }
 }
 
@@ -762,8 +1084,9 @@ fn run_loop(rx: pw::channel::Receiver<Cmd>) -> Result<pw::channel::Receiver<Cmd>
                 match global.type_ {
                     pw::types::ObjectType::Node => {
                         let class = props.get("media.class").unwrap_or("");
-                        if class == "Stream/Input/Audio" {
-                            if let Err(e) = track_stream(&registry, global, local) {
+                        if class == "Stream/Input/Audio" || class == "Stream/Output/Audio" {
+                            let output = class == "Stream/Output/Audio";
+                            if let Err(e) = track_stream(&registry, global, output, local) {
                                 log::warn!("pipewire: failed to track stream {}: {e}", global.id);
                             }
                             return;
@@ -846,7 +1169,11 @@ fn track_node(
                         if let Some(name) = props.get("node.name") {
                             entry.node_name = name.to_string();
                         }
+                        if let Some(serial) = props.get("object.serial") {
+                            entry.serial = serial.to_string();
+                        }
                         entry.device_id = props.get("device.id").and_then(|v| v.parse().ok());
+                        entry.facade = props.get("deck.facade").map(|s| s.to_string());
                     }
                     // subscribe_params only pushes the initial values; changes
                     // are announced via PARAMS here and must be re-enumerated.
@@ -889,8 +1216,10 @@ fn track_node(
         NodeEntry {
             name: String::new(),
             node_name: String::new(),
+            serial: String::new(),
             is_sink,
             device_id: None,
+            facade: None,
             state: String::new(),
             volume: 0,
             muted: false,
@@ -990,6 +1319,7 @@ fn track_device(
 fn track_stream(
     registry: &pw::registry::Registry,
     global: &pw::registry::GlobalObject<&libspa::utils::dict::DictRef>,
+    output: bool,
     local: &Rc<RefCell<Local>>,
 ) -> Result<(), pw::Error> {
     let id = global.id;
@@ -1002,7 +1332,11 @@ fn track_stream(
             move |info| {
                 let mut l = local.borrow_mut();
                 if let Some(entry) = l.streams.get_mut(&id) {
+                    entry.state = node_state_str(&info.state());
                     if let Some(props) = info.props() {
+                        if let Some(name) = props.get("node.name") {
+                            entry.node_name = name.to_string();
+                        }
                         entry.target = props
                             .get("target.object")
                             .or_else(|| props.get("node.target"))
@@ -1021,9 +1355,12 @@ fn track_stream(
     local.borrow_mut().streams.insert(
         id,
         StreamEntry {
+            output,
+            node_name: String::new(),
             target: None,
             passive: false,
             monitor: false,
+            state: String::new(),
             _proxy: node,
             _listener: listener,
         },
@@ -1118,6 +1455,20 @@ fn handle_cmd(local: &Rc<RefCell<Local>>, metadata: &Rc<RefCell<Option<MetaEntry
             if let Some(pod) = pod_bytes.as_deref().and_then(Pod::from_bytes) {
                 entry.proxy.set_param(ParamType::Props, 0, pod);
             }
+        }
+        Cmd::Retarget { stream, serial } => {
+            let meta = metadata.borrow();
+            let Some((_, meta, _)) = meta.as_ref() else { return };
+            match serial {
+                Some(s) => {
+                    // Serials are numeric; node names are plain strings.
+                    let type_ = if s.chars().all(|c| c.is_ascii_digit()) { Some("Spa:Id") } else { None };
+                    meta.set_property(stream, "target.object", type_, Some(&s));
+                }
+                None => {
+                    meta.set_property(stream, "target.object", None, None);
+                }
+            };
         }
         Cmd::Mute { node, mute } => {
             let l = local.borrow();
