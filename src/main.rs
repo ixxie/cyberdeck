@@ -71,6 +71,7 @@ fn main() {
 
     ipc::register_listener(&loop_handle);
     pipewire::start();
+    pipewire::start_policy();
     watchdog::spawn();
 
     let mut app = bar::BarApp::new(config, &globals, &qh, &loop_handle, gpu_state);

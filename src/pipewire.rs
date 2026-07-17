@@ -56,11 +56,21 @@ pub struct BtDevice {
     pub profiles: Vec<BtProfile>,
 }
 
+/// A live capture stream — an app pulling audio. Passive streams (filter
+/// chains like rnnoise) and monitor taps don't express mic demand.
+#[derive(Clone, Debug)]
+pub struct CaptureStream {
+    pub target: Option<String>,
+    pub passive: bool,
+    pub monitor: bool,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct PwState {
     pub outputs: Vec<PwDevice>,
     pub inputs: Vec<PwDevice>,
     pub bt: Vec<BtDevice>,
+    pub capture: Vec<CaptureStream>,
     pub denoise: bool,
 }
 
@@ -212,6 +222,7 @@ pub fn select_mic(target: Target) -> Result<String, String> {
                 None => {
                     let name = n.name.clone();
                     set_default_and_wait(false, n.id)?;
+                    set_preferred(None);
                     // The old mic's headset profile is telephone-grade for
                     // playback; give the device its audio quality back.
                     if let Some(prev) = prev_bt {
@@ -238,6 +249,13 @@ pub fn select_mic(target: Target) -> Result<String, String> {
     })
     .map_err(|_| format!("{}: headset profile engaged but no mic appeared — transport failed", bt.name))?;
     set_default_and_wait(false, node)?;
+    let source_node = query()
+        .inputs
+        .iter()
+        .find(|n| n.id == node)
+        .map(|n| n.node_name.clone())
+        .unwrap_or_default();
+    set_preferred(Some(Preferred { device_id: bt.device_id, source_node }));
 
     // The previous default mic's device no longer serves capture; give its
     // audio quality back (headset profile is telephone-grade for playback).
@@ -249,8 +267,9 @@ pub fn select_mic(target: Target) -> Result<String, String> {
     Ok(format!("mic → {}", bt.name))
 }
 
-/// Make `target` the default speaker. Bluetooth devices are moved to a2dp
-/// (hi-fi) first unless their mic is the current default source.
+/// Make `target` the default speaker. Bluetooth devices always move to a2dp
+/// (hi-fi); if their mic is the preferred one, the demand policy re-engages
+/// the headset profile the moment something actually captures.
 pub fn select_speaker(target: Target) -> Result<String, String> {
     let _guard = switch_guard()?;
     let state = query();
@@ -274,12 +293,10 @@ pub fn select_speaker(target: Target) -> Result<String, String> {
             .clone(),
     };
 
-    let mic_in_use = default_bt_device(&state, false)
-        .map(|d| d.device_id == bt.device_id)
-        .unwrap_or(false);
-    if !mic_in_use {
-        engage_profile(&bt, ProfileKind::A2dp)?;
-    }
+    // An explicit hi-fi request wins over live mic demand until the next
+    // fresh demand edge — otherwise the policy would flip straight back.
+    hold_policy_for(bt.device_id);
+    engage_profile(&bt, ProfileKind::A2dp)?;
     let node = wait_for(Duration::from_secs(6), |s| {
         s.outputs
             .iter()
@@ -302,12 +319,124 @@ pub fn switch_profile(device_id: u32, kind: ProfileKind) -> Result<String, Strin
         .find(|b| b.device_id == device_id)
         .ok_or("device is gone")?
         .clone();
+    hold_policy_for(device_id);
     engage_profile(&bt, kind)?;
     let label = match kind {
         ProfileKind::A2dp => "a2dp",
         ProfileKind::Hfp => "headset",
     };
     Ok(format!("{} → {label}", bt.name))
+}
+
+// ---- Demand policy ----
+//
+// The profile follows mic *usage*: selecting a bluetooth mic records intent
+// (preferred mic); the profile itself dances with demand. Real capture
+// streams appear → headset profile engages; the last one has been gone for
+// RESTORE_AFTER → a2dp comes back. Manual profile actions set a hold that a
+// fresh demand edge clears, so the user always wins the argument they just
+// started.
+
+const RESTORE_AFTER: Duration = Duration::from_secs(10);
+
+#[derive(Clone)]
+struct Preferred {
+    device_id: u32,
+    source_node: String,
+}
+
+static PREFERRED: Mutex<Option<Preferred>> = Mutex::new(None);
+static POLICY_HOLD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn hold_policy_for(device_id: u32) {
+    let pref = PREFERRED.lock().unwrap();
+    if pref.as_ref().map(|p| p.device_id) == Some(device_id) {
+        POLICY_HOLD.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+fn set_preferred(pref: Option<Preferred>) {
+    *PREFERRED.lock().unwrap() = pref;
+    POLICY_HOLD.store(false, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Does any live stream want the mic? Streams following the default count
+/// always; explicitly-targeted streams only when aimed at the preferred mic.
+fn mic_demand(state: &PwState, pref: &Preferred) -> bool {
+    state.capture.iter().any(|c| {
+        if c.passive || c.monitor {
+            return false;
+        }
+        match &c.target {
+            None => true,
+            Some(t) => t == &pref.source_node,
+        }
+    })
+}
+
+/// Spawn the demand-follow policy. Daemon only — CLI one-shots must not run
+/// a second policy actor against the same graph.
+pub fn start_policy() {
+    std::thread::Builder::new()
+        .name("pw-policy".into())
+        .spawn(policy_thread)
+        .expect("failed to spawn pipewire policy");
+}
+
+fn policy_thread() {
+    use std::sync::atomic::Ordering;
+
+    let mut seen = 0u64;
+    let mut demand_was = false;
+    let mut quiet_since: Option<Instant> = None;
+
+    loop {
+        // The timeout doubles as the debounce tick when the graph is quiet.
+        seen = wait_generation(seen, Duration::from_secs(2));
+
+        let Some(pref) = PREFERRED.lock().unwrap().clone() else {
+            demand_was = false;
+            quiet_since = None;
+            continue;
+        };
+        let state = query();
+        let Some(bt) = state.bt.iter().find(|b| b.device_id == pref.device_id) else {
+            continue;
+        };
+        if !bt.connected {
+            continue;
+        }
+
+        let demand = mic_demand(&state, &pref);
+        if demand {
+            quiet_since = None;
+            if !demand_was {
+                // Fresh demand outranks any manual hold.
+                POLICY_HOLD.store(false, Ordering::SeqCst);
+            }
+            demand_was = true;
+            if !POLICY_HOLD.load(Ordering::SeqCst) && !bt.profile.starts_with("headset") {
+                let Ok(_guard) = SWITCHING.try_lock() else { continue };
+                match engage_profile(bt, ProfileKind::Hfp) {
+                    Ok(()) => ipc::notify_bar("audio", &format!("mic engaged: {}", bt.name)),
+                    Err(e) => ipc::notify_bar("audio", &e),
+                }
+            }
+        } else {
+            demand_was = false;
+            if bt.profile.starts_with("headset") && !POLICY_HOLD.load(Ordering::SeqCst) {
+                let since = *quiet_since.get_or_insert_with(Instant::now);
+                if since.elapsed() >= RESTORE_AFTER {
+                    quiet_since = None;
+                    let Ok(_guard) = SWITCHING.try_lock() else { continue };
+                    restore_a2dp(bt.device_id);
+                    ipc::notify_bar("audio", &format!("{}: back to hi-fi (mic idle)", bt.name));
+                }
+            } else {
+                quiet_since = None;
+            }
+        }
+    }
 }
 
 // ---- Orchestration internals ----
@@ -518,10 +647,19 @@ struct DeviceEntry {
     _listener: pw::device::DeviceListener,
 }
 
+struct StreamEntry {
+    target: Option<String>,
+    passive: bool,
+    monitor: bool,
+    _proxy: pw::node::Node,
+    _listener: pw::node::NodeListener,
+}
+
 #[derive(Default)]
 struct Local {
     nodes: HashMap<u32, NodeEntry>,
     devices: HashMap<u32, DeviceEntry>,
+    streams: HashMap<u32, StreamEntry>,
     default_sink: Option<String>,
     default_source: Option<String>,
 }
@@ -567,8 +705,17 @@ impl Local {
             })
             .collect();
         bt.sort_by_key(|d| d.device_id);
+        let capture = self
+            .streams
+            .values()
+            .map(|s| CaptureStream {
+                target: s.target.clone(),
+                passive: s.passive,
+                monitor: s.monitor,
+            })
+            .collect();
         let denoise = self.nodes.values().any(|n| n.node_name == "rnnoise_source");
-        PwState { outputs, inputs, bt, denoise }
+        PwState { outputs, inputs, bt, capture, denoise }
     }
 }
 
@@ -615,6 +762,12 @@ fn run_loop(rx: pw::channel::Receiver<Cmd>) -> Result<pw::channel::Receiver<Cmd>
                 match global.type_ {
                     pw::types::ObjectType::Node => {
                         let class = props.get("media.class").unwrap_or("");
+                        if class == "Stream/Input/Audio" {
+                            if let Err(e) = track_stream(&registry, global, local) {
+                                log::warn!("pipewire: failed to track stream {}: {e}", global.id);
+                            }
+                            return;
+                        }
                         if class != "Audio/Sink" && class != "Audio/Source" {
                             return;
                         }
@@ -646,6 +799,7 @@ fn run_loop(rx: pw::channel::Receiver<Cmd>) -> Result<pw::channel::Receiver<Cmd>
                 let mut l = local_rm.borrow_mut();
                 l.nodes.remove(&id);
                 l.devices.remove(&id);
+                l.streams.remove(&id);
                 let snap = l.snapshot();
                 drop(l);
                 let is_meta = metadata_rm.borrow().as_ref().map(|(mid, ..)| *mid == id).unwrap_or(false);
@@ -827,6 +981,50 @@ fn track_device(
             profile: "off".into(),
             profiles: Vec::new(),
             proxy: device,
+            _listener: listener,
+        },
+    );
+    Ok(())
+}
+
+fn track_stream(
+    registry: &pw::registry::Registry,
+    global: &pw::registry::GlobalObject<&libspa::utils::dict::DictRef>,
+    local: &Rc<RefCell<Local>>,
+) -> Result<(), pw::Error> {
+    let id = global.id;
+    let node: pw::node::Node = registry.bind(global)?;
+
+    let listener = node
+        .add_listener_local()
+        .info({
+            let local = local.clone();
+            move |info| {
+                let mut l = local.borrow_mut();
+                if let Some(entry) = l.streams.get_mut(&id) {
+                    if let Some(props) = info.props() {
+                        entry.target = props
+                            .get("target.object")
+                            .or_else(|| props.get("node.target"))
+                            .map(|s| s.to_string());
+                        entry.monitor = props.get("stream.monitor") == Some("true");
+                        entry.passive = matches!(props.get("node.passive"), Some("true" | "in" | "out"));
+                    }
+                    let snap = l.snapshot();
+                    drop(l);
+                    publish(snap);
+                }
+            }
+        })
+        .register();
+
+    local.borrow_mut().streams.insert(
+        id,
+        StreamEntry {
+            target: None,
+            passive: false,
+            monitor: false,
+            _proxy: node,
             _listener: listener,
         },
     );

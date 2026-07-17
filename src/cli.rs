@@ -208,6 +208,35 @@ fn run_pw_cmd(args: &[String]) {
                 pipewire::select_mic(target)
             });
         }
+        // Foreground demand-policy harness: set the named device as preferred
+        // mic, run the policy, and narrate transitions. Only for debugging —
+        // don't run it while a bar with its own policy actor is live.
+        Some("watch") => {
+            let needle = args[1..].join(" ");
+            let Some(target) = find(false, &needle) else {
+                eprintln!("no device matching '{needle}'");
+                std::process::exit(1);
+            };
+            report(pipewire::select_mic(target));
+            pipewire::start_policy();
+            let mut last = String::new();
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                let s = pipewire::query();
+                let demand = s.capture.iter().filter(|c| !c.passive && !c.monitor).count();
+                let profile = s
+                    .bt
+                    .iter()
+                    .find(|b| b.name.to_lowercase().contains(&needle.to_lowercase()))
+                    .map(|b| b.profile.clone())
+                    .unwrap_or_default();
+                let line = format!("profile={profile} capture_streams={demand}");
+                if line != last {
+                    println!("{line}");
+                    last = line;
+                }
+            }
+        }
         Some("profile") => {
             let kind = match args.get(1).map(String::as_str) {
                 Some("a2dp") => ProfileKind::A2dp,
