@@ -376,13 +376,12 @@ fn write_facade_config(mac: &str, desc: &str) -> Option<String> {
     let conf_path = std::path::PathBuf::from(cache).join(format!("cyberdeck/facade-{mac}.conf"));
     let _ = std::fs::create_dir_all(conf_path.parent()?);
     // module-loopback self-destructs at init when a configured target.object
-    // does not exist yet. The sink backend can carry a static target (the
-    // bluez output node exists in every profile, and ensure_facade only
-    // spawns while the device is connected) plus dont-fallback so flip gaps
-    // stall instead of leaking to another device. The mic backend gets no
-    // target — the headset-profile source only exists on demand — and is
-    // pinned at runtime by the policy instead; wireplumber's link-group
-    // exclusion keeps it from ever looping back onto the façade itself.
+    // does not exist yet — and a profile flip makes even the sink node
+    // briefly absent, so NO backend carries a static target (field evidence:
+    // a spawn racing a flip left a half-façade, sink module dead). Both
+    // backends are pinned at runtime by the policy, which re-pins on every
+    // graph wake; wireplumber's link-group exclusion keeps the unpinned
+    // streams from ever looping back onto the façade itself.
     let config = format!(
         r#"context.modules = [
 {{  name = libpipewire-module-rt
@@ -405,8 +404,6 @@ fn write_facade_config(mac: &str, desc: &str) -> Option<String> {
         playback.props = {{
             node.name = "deck_sink_out.{mac}"
             node.description = "{desc} link out"
-            target.object = "bluez_output.{mac}.1"
-            node.dont-fallback = true
             node.passive = true
             audio.rate = 48000
             node.latency = "256/48000"
@@ -446,12 +443,17 @@ fn ensure_facade(bt: &BtDevice) -> Result<Facade, String> {
     let mac = mac_from_path(&bt.path).ok_or_else(|| format!("{}: no mac in device path", bt.name))?;
 
     if let Some(f) = facade() {
-        if f.mac == mac {
+        let nodes_alive = query()
+            .outputs
+            .iter()
+            .any(|n| n.node_name == f.sink_name());
+        if f.mac == mac && nodes_alive {
             if f.device_id != bt.device_id {
                 *FACADE.lock().unwrap() = Some(Facade { device_id: bt.device_id, mac: mac.clone() });
             }
             return Ok(facade().unwrap());
         }
+        // Wrong device, or the child died / half-died — rebuild from scratch.
         teardown_facade();
     }
 
@@ -635,7 +637,13 @@ fn policy_thread() {
             }
         }
 
-        let Some(pref) = PREFERRED.lock().unwrap().clone() else {
+        // With a façade up, the device is under management even when no
+        // explicit mic preference survived a restart — otherwise a headset
+        // profile left behind by a previous run sticks forever.
+        let pref = PREFERRED.lock().unwrap().clone().or_else(|| {
+            facade().map(|f| Preferred { device_id: f.device_id, source_node: f.mic_name() })
+        });
+        let Some(pref) = pref else {
             demand_was = false;
             quiet_since = None;
             continue;
