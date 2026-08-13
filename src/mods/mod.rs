@@ -207,20 +207,36 @@ pub fn create_interactive(
     }
 }
 
+// A subscribe fn is meant to run for the process lifetime, so returning means
+// its service was unreachable or went away — reconnect rather than leaving the
+// module frozen on its last value. This is not hypothetical: a nixos switch
+// restarts the bar and NetworkManager seconds apart, and whichever loses the
+// race used to strand its module showing "disconnected" until the next manual
+// restart. Re-seeding by poll each round also refreshes the data the moment
+// the service returns.
+const SUBSCRIBE_RETRY: Duration = Duration::from_secs(5);
+
 fn spawn_subscribe_thread(spec: SubscribeSpec, sender: Sender<(String, serde_json::Value)>) {
     std::thread::Builder::new()
         .name(format!("sub-{}", spec.id))
         .spawn(move || {
             log::debug!("subscribe thread started: {}", spec.id);
+            loop {
+                let val = (spec.poll_fn)(&spec.params);
+                // A closed channel means the bar is gone; nothing to retry for.
+                if sender.send((spec.id.clone(), val)).is_err() {
+                    return;
+                }
 
-            // Initial seed via poll
-            let val = (spec.poll_fn)(&spec.params);
-            if sender.send((spec.id.clone(), val)).is_err() {
-                return;
+                (spec.subscribe_fn)(spec.params.clone(), sender.clone(), spec.id.clone());
+
+                log::warn!(
+                    "subscribe ended for {}, reconnecting in {}s",
+                    spec.id,
+                    SUBSCRIBE_RETRY.as_secs()
+                );
+                std::thread::sleep(SUBSCRIBE_RETRY);
             }
-
-            // Event-driven updates
-            (spec.subscribe_fn)(spec.params, sender, spec.id);
         })
         .expect("failed to spawn subscribe thread");
 }
