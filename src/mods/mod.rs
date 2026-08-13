@@ -1,4 +1,5 @@
 mod actions;
+pub mod airplane;
 pub mod audio;
 pub mod bluetooth;
 mod keyboard;
@@ -75,6 +76,7 @@ pub fn register<D: 'static>(
         "media" => media::poll,
         "network" => network::poll,
         "bluetooth" => bluetooth::poll,
+        "airplane" => airplane::poll,
         "weather" => weather::poll,
         "notifications" => notifications::poll,
         "window" => window::poll,
@@ -96,6 +98,7 @@ pub fn register<D: 'static>(
         "audio" => Some(audio::subscribe),
         "network" => Some(network::subscribe),
         "bluetooth" => Some(bluetooth::subscribe),
+        "airplane" => Some(airplane::subscribe),
         "session" => Some(session::subscribe),
         "profiles" => Some(profiles::subscribe),
         _ => None,
@@ -190,6 +193,7 @@ pub fn create_interactive(
         "notifications" => Some(Box::new(notifications::NotificationsDeep::new())),
         "calendar" => Some(Box::new(calendar::CalendarDeep::new())),
         "bluetooth" => Some(Box::new(bluetooth::BluetoothDeep::new())),
+        "airplane" => Some(Box::new(airplane::AirplaneDeep::new(icon_resolver))),
         "keyboard" => Some(Box::new(keyboard::KeyboardDeep::new())),
         "network" => Some(Box::new(network::NetworkDeep::new())),
         "wallpaper" => Some(Box::new(wallpaper_deep::WallpaperDeep::new(module))),

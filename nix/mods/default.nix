@@ -11,6 +11,7 @@ in
   };
 
   modules = {
+    airplane = importMod "airplane";
     audio = importMod "audio";
     bluetooth = importMod "bluetooth";
     brightness = importMod "brightness";

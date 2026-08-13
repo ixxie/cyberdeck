@@ -10,11 +10,17 @@ interval = 10
 
 [badges.default]
 template = '{{ "bluetooth" | icon }}'
-condition = "{{ devices | selectattr('connected', 'true') | list | length > 0 }}"
+condition = '{{ devices | filter(attribute="connected", value=true) | length > 0 }}'
+
+# Bluetooth blocked on its own is the silent failure mode — the airplane
+# module already owns the badge when everything is blocked.
+[badges.blocked]
+template = '{{ "bluetooth-slash" | icon }}'
+condition = "{% if blocked and not airplane %}true{% endif %}"
 
 [widget]
 template = '''
-{% if not powered %}off{% elif devices | length == 0 %}no devices{% else %}{% for d in devices %}{% if d.connected %}{{ d.name }}{% else %}{{ d.name | dim }}{% endif %}{% if not loop.last %}  {% endif %}{% endfor %}{% endif %}'''
+{% if blocked %}{% if airplane %}airplane mode{% else %}blocked (rfkill){% endif %}{% elif not powered %}off{% elif devices | length == 0 %}no devices{% else %}{% for d in devices %}{% if d.connected %}{{ d.name }}{% else %}{{ d.name | dim }}{% endif %}{% if not loop.last %}  {% endif %}{% endfor %}{% endif %}'''
 
 [[actions]]
 name = "on"

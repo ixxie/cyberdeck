@@ -7,7 +7,7 @@ use smithay_client_toolkit::seat::keyboard::{KeyEvent, Keysym};
 use crate::color::Rgba;
 use crate::config::KeyHintDef;
 use crate::layout::Elem;
-use crate::mods::{InteractiveModule, KeyResult};
+use crate::mods::{airplane, InteractiveModule, KeyResult};
 
 // -- D-Bus proxies for BlueZ --
 
@@ -159,7 +159,12 @@ async fn register_agent(conn: &zbus::Connection) -> zbus::Result<()> {
 // -- Snapshot --
 
 fn empty() -> Value {
-    json!({ "powered": false, "devices": [] })
+    json!({
+        "powered": false,
+        "blocked": airplane::kind_blocked("bluetooth"),
+        "airplane": airplane::all_blocked(),
+        "devices": [],
+    })
 }
 
 async fn snapshot(conn: &zbus::Connection) -> Value {
@@ -218,6 +223,10 @@ async fn snapshot_inner(conn: &zbus::Connection) -> zbus::Result<Value> {
 
     Ok(json!({
         "powered": powered,
+        // An rfkill block reads as plain "off" everywhere in BlueZ, which is
+        // how a stray airplane-mode keypress can hide for days. Name it.
+        "blocked": airplane::kind_blocked("bluetooth"),
+        "airplane": airplane::all_blocked(),
         "devices": devices,
     }))
 }
@@ -395,6 +404,21 @@ fn start_discovery() {
 
 fn set_powered(on: bool) {
     log::info!("bluetooth: power {}", if on { "on" } else { "off" });
+    // BlueZ refuses to power on through an rfkill block and reports only
+    // "Failed (0x03)", so asking for bluetooth means clearing the block too.
+    if on && airplane::kind_blocked("bluetooth") {
+        match airplane::set_kind("bluetooth", false) {
+            Ok(()) => {
+                log::info!("bluetooth: cleared rfkill block");
+                crate::ipc::notify_bar("bluetooth", "unblocked (was airplane mode)");
+            }
+            Err(e) => {
+                log::warn!("bluetooth: failed to clear rfkill block: {e}");
+                crate::ipc::notify_bar("bluetooth", &format!("blocked by rfkill: {e}"));
+                return;
+            }
+        }
+    }
     spawn_action(if on { "power on" } else { "power off" }, move |conn| Box::pin(async move {
         let adapter = Adapter1Proxy::builder(&conn)
             .path("/org/bluez/hci0")?
@@ -539,7 +563,14 @@ impl InteractiveModule for BluetoothDeep {
 
         let powered = data.get("powered").and_then(|v| v.as_bool()).unwrap_or(false);
         if !powered {
-            return vec![vec![Elem::text("off").fg(idle_fg)]];
+            let blocked = data.get("blocked").and_then(|v| v.as_bool()).unwrap_or(false);
+            let airplane_on = data.get("airplane").and_then(|v| v.as_bool()).unwrap_or(false);
+            let label = match (blocked, airplane_on) {
+                (true, true) => "blocked — airplane mode",
+                (true, false) => "blocked — rfkill",
+                _ => "off",
+            };
+            return vec![vec![Elem::text(label).fg(idle_fg)]];
         }
 
         let devices = data.get("devices").and_then(|v| v.as_array());

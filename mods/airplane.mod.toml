@@ -1,0 +1,54 @@
+name = "Airplane"
+description = "Radio kill switches"
+icon = "airplane-tilt"
+type = "airplane"
+
+[source]
+type = "native"
+kind = "airplane"
+interval = 10
+
+# Full airplane mode and a partial block are different animals: the first is
+# something you did, the second is usually something you forgot you did. Both
+# belong in the bar, with distinct icons.
+[badges.default]
+template = '{{ "airplane-tilt" | icon }}'
+condition = "{{ enabled }}"
+
+[badges.partial]
+template = '{{ "airplane-taxiing" | icon }}'
+condition = "{{ partial }}"
+
+[widget]
+template = '''
+{% if enabled %}airplane mode{% elif partial %}{{ blocked_kinds | join(sep=", ") }} blocked{% else %}radios on{% endif %}'''
+
+[[actions]]
+name = "on"
+run = "native"
+label = "airplane mode on"
+
+[[actions]]
+name = "off"
+run = "native"
+label = "airplane mode off"
+
+[[actions]]
+name = "toggle"
+run = "native"
+label = "toggle airplane mode"
+
+[[actions]]
+name = "block"
+run = "native"
+label = "block a radio"
+
+[[actions]]
+name = "unblock"
+run = "native"
+label = "unblock a radio"
+
+[[key-hints]]
+key = "Esc"
+action = "back"
+label = "back"

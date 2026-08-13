@@ -35,6 +35,16 @@ pub fn exec_native(
             }
         }
 
+        ("airplane", act @ ("on" | "off" | "toggle" | "block" | "unblock")) => {
+            match crate::mods::airplane::cli_action(act, args) {
+                Ok(toast) => ActionResult::Ok { toast },
+                Err(msg) => {
+                    log::warn!("airplane {act}: {msg}");
+                    ActionResult::Ok { toast: msg }
+                }
+            }
+        }
+
         ("session", act @ ("suspend" | "shutdown" | "reboot")) => {
             match crate::mods::session::cli_action(act, args) {
                 Ok(toast) => ActionResult::Ok { toast },
