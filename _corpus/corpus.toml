@@ -1,0 +1,20 @@
+# cyberdeck's corpus: what the shell is, how it is built, and why it is the
+# way it is. Nothing is enforced; the project is in maintenance mode and the
+# docs were written after the fact, so no commit before them cites anything.
+
+[types.decision]
+frozen = true               # accepted decisions are never edited again
+
+# The decisions were recorded retroactively (2026-09-23) from the history, so
+# no commit cites them; "uncited" is a worklist here, not a defect.
+[drift]
+uncited = "warn"
+
+# The architecture article draws the stack in strata; `strata` must be on
+# PATH (lab/strata, `nix build` there).
+[diagram.strata]
+command = ["strata"]
+
+[[nav]]
+title = "Start here"
+docs = ["article/overview", "article/architecture"]
