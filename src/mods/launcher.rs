@@ -1,3 +1,5 @@
+// corpus:article/architecture
+
 use std::collections::HashMap;
 use std::env;
 use std::fs;

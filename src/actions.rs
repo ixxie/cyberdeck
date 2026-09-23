@@ -1,3 +1,5 @@
+// corpus:decision/26-03-29-one-action-registry
+
 use serde_json::Value;
 
 pub enum ActionResult {

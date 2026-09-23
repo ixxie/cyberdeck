@@ -1,3 +1,5 @@
+// corpus:article/architecture
+
 use std::collections::BTreeMap;
 use std::process::Command;
 

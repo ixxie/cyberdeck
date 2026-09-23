@@ -1,3 +1,8 @@
+// corpus:article/architecture
+// corpus:decision/26-07-12-native-pipewire-backend
+// corpus:decision/26-07-12-cyberdeck-owns-bt-profile-switching
+// corpus:decision/26-07-17-bluetooth-device-facade
+
 //! Native PipeWire backend.
 //!
 //! A dedicated thread runs a PipeWire main loop with registry, node, device

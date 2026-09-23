@@ -1,3 +1,7 @@
+// corpus:article/architecture
+// corpus:decision/26-03-26-module-manifests
+// corpus:decision/26-03-21-tera-templates
+
 use std::collections::HashMap;
 use crate::config::ModuleDef;
 

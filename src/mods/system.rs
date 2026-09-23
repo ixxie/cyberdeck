@@ -1,3 +1,5 @@
+// corpus:article/architecture
+
 use serde_json::{json, Value};
 use std::cell::RefCell;
 use std::fs;

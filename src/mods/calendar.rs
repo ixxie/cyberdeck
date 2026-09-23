@@ -1,3 +1,5 @@
+// corpus:article/architecture
+
 use chrono::{Datelike, Local};
 use serde_json::{json, Value};
 use smithay_client_toolkit::seat::keyboard::{KeyEvent, Keysym};

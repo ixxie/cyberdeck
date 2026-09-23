@@ -1,3 +1,7 @@
+// corpus:article/architecture
+// corpus:decision/26-03-29-event-driven-sources
+// corpus:decision/26-08-13-subscribers-reconnect
+
 mod actions;
 pub mod airplane;
 pub mod audio;

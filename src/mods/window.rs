@@ -1,3 +1,6 @@
+// corpus:article/architecture
+// corpus:decision/26-03-21-niri-only
+
 use serde_json::{json, Value};
 use std::io::Read;
 use std::process::Command;

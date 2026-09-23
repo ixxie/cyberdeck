@@ -1,3 +1,5 @@
+// corpus:article/architecture
+
 mod actions;
 mod appicon;
 mod bar;

@@ -1,3 +1,5 @@
+// corpus:decision/26-04-02-gpu-rendering-with-vello
+
 use vello::Scene;
 use vello::kurbo::{Affine, RoundedRect};
 use vello::peniko::Fill;

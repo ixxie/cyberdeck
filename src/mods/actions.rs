@@ -1,3 +1,6 @@
+// corpus:article/architecture
+// corpus:decision/26-03-29-one-action-registry
+
 use smithay_client_toolkit::seat::keyboard::{KeyEvent, Keysym};
 
 use crate::bar::BarApp;

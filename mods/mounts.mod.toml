@@ -1,3 +1,5 @@
+# corpus:article/architecture
+
 name = "Mounts"
 description = "Mounted drives and removable media"
 icon = "usb"

@@ -1,3 +1,5 @@
+// corpus:article/architecture
+
 use rustix::fs::statvfs;
 use serde_json::{json, Value};
 use std::fs;

@@ -1,3 +1,6 @@
+// corpus:article/architecture
+// corpus:decision/26-08-13-rfkill-without-a-helper
+
 //! Airplane mode — the kernel's rfkill switches.
 //!
 //! rfkill blocks are sticky in a way that surprises people: systemd-rfkill
