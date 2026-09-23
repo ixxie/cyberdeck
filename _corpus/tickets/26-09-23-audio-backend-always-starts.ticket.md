@@ -1,5 +1,5 @@
 ---
-status: open
+status: todo
 title: The audio backend and watchdog start even when unused
 ---
 

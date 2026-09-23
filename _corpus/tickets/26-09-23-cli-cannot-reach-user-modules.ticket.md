@@ -1,5 +1,5 @@
 ---
-status: open
+status: todo
 title: The CLI cannot reach user-defined modules
 ---
 

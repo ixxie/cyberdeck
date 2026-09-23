@@ -1,5 +1,5 @@
 ---
-status: open
+status: todo
 title: The keyboard module calls swaymsg
 ---
 

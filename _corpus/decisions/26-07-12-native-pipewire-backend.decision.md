@@ -38,5 +38,5 @@ Audio updates are event-driven and the backend sees everything it needs
 for [owning bluetooth profile switching](corpus:decision/26-07-12-cyberdeck-owns-bt-profile-switching).
 The binary links libpipewire, and the monitor thread starts with the daemon
 whether or not the audio module is enabled
-([the issue](corpus:issue/26-09-23-audio-backend-always-starts)). The
+([the issue](corpus:ticket/26-09-23-audio-backend-always-starts)). The
 mod.toml's shell actions (`cyberdeck audio up`) still call `wpctl`.

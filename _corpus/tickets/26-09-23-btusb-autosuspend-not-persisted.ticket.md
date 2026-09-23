@@ -1,5 +1,5 @@
 ---
-status: open
+status: todo
 title: btusb autosuspend is disabled only at runtime
 ---
 

@@ -1,5 +1,5 @@
 ---
-status: open
+status: todo
 title: Monitor management
 ---
 

@@ -1,5 +1,5 @@
 ---
-status: open
+status: todo
 title: The README has drifted from the code
 ---
 

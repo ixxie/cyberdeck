@@ -40,6 +40,6 @@ id that is not a builtin is a complete user-defined module.
 One binary carries its modules; the CLI, the bar and the NixOS module agree
 on them by construction. A native module still has to be registered in
 several hand-written match statements
-([the issue](corpus:issue/26-09-23-native-modules-need-five-edits)), and the
+([the issue](corpus:ticket/26-09-23-native-modules-need-five-edits)), and the
 CLI knows only builtins
-([the issue](corpus:issue/26-09-23-cli-cannot-reach-user-modules)).
+([the issue](corpus:ticket/26-09-23-cli-cannot-reach-user-modules)).

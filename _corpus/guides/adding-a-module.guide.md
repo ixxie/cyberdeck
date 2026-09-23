@@ -34,7 +34,7 @@ services.cyberdeck.mods.uptime = {
 
 Or in `~/.config/cyberdeck/config.toml` under `[bar.modules.uptime]`. The
 CLI only knows builtins, so `cyberdeck uptime …` will not work for it —
-see [the issue](corpus:issue/26-09-23-cli-cannot-reach-user-modules).
+see [the issue](corpus:ticket/26-09-23-cli-cannot-reach-user-modules).
 
 ## Manifest-only builtin
 

@@ -36,7 +36,7 @@ as a prerequisite.
 The Niri integration is deep and cheap: event-driven workspace and title
 updates with no polling. It also makes cyberdeck unusable anywhere else,
 which is the first thing a wider audience would hit — see
-[compositor lock-in](corpus:issue/26-09-23-niri-lock-in). The keyboard
+[compositor lock-in](corpus:ticket/26-09-23-niri-lock-in). The keyboard
 module never followed: it still calls `swaymsg`, so it does not work on the
 one compositor cyberdeck supports
-([the issue](corpus:issue/26-09-23-keyboard-module-calls-swaymsg)).
+([the issue](corpus:ticket/26-09-23-keyboard-module-calls-swaymsg)).

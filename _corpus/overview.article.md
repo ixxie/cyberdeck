@@ -99,8 +99,8 @@ keys to `cyberdeck` commands.
 - **Consumer-ready it is not.** It hardcodes Niri, assumes `wayland-1`,
   starts its PipeWire backend whether or not audio is enabled, and one
   module still shells out to `swaymsg`. The gaps are filed as issues and
-  gathered in [consumer readiness](corpus:issue/26-09-23-consumer-readiness).
+  gathered in [consumer readiness](corpus:ticket/26-09-23-consumer-readiness).
 - **Next move.** Relocate to the *playground* space in the new home layout —
-  [the issue](corpus:issue/26-09-23-move-to-the-playground-space).
+  [the issue](corpus:ticket/26-09-23-move-to-the-playground-space).
 
 The dated story is in [the history](corpus:article/history).

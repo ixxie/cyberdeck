@@ -88,4 +88,4 @@ systemctl --user enable --now cyberdeck
 
 This path has not been touched since 2026-03-28, before the PipeWire
 dependency arrived; see
-[the issue](corpus:issue/26-09-23-release-path-is-stale).
+[the issue](corpus:ticket/26-09-23-release-path-is-stale).

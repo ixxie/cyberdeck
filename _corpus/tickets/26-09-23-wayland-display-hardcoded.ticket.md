@@ -1,5 +1,5 @@
 ---
-status: open
+status: todo
 title: WAYLAND_DISPLAY is hardcoded to wayland-1
 ---
 

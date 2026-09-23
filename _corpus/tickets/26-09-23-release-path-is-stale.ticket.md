@@ -1,5 +1,5 @@
 ---
-status: open
+status: todo
 title: The release path and remotes are stale
 ---
 
@@ -19,7 +19,7 @@ The non-NixOS path has not been touched since 2026-03-28:
   since exist locally and on the `bacillus` remote only.
 
 Decide the canonical remote (see
-[the playground move](corpus:issue/26-09-23-move-to-the-playground-space)),
+[the playground move](corpus:ticket/26-09-23-move-to-the-playground-space)),
 push to it, then either fix the workflow's dependencies or drop the
 binary-release path until someone needs it.
 

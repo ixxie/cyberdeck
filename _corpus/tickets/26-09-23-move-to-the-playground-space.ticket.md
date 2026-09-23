@@ -1,5 +1,5 @@
 ---
-status: open
+status: todo
 title: Move cyberdeck to the playground space
 ---
 
@@ -21,7 +21,7 @@ Moving it means:
   keeps building from the old path;
 - deciding whether playground is pushed to the forge, and where cyberdeck's
   canonical remote is (see
-  [the stale release path](corpus:issue/26-09-23-release-path-is-stale)).
+  [the stale release path](corpus:ticket/26-09-23-release-path-is-stale)).
 
 Waits for the playground group to exist.
 
