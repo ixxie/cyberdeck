@@ -1,7 +1,3 @@
-<div align="right">
-  <a href="https://ixxie.codeberg.page/bergmirror/redirect/?cb=ixxie/cyberdeck&gh=ixxie/cyberdeck"><img src="https://ixxie.codeberg.page/bergmirror/badge.svg" alt="Codeberg → GitHub mirror"/></a>
-</div>
-
 > [!WARNING]  
 > Experimental, vibe coded software. Works on my machine, but I'm no Rust/Wayland dev.
 
